@@ -370,8 +370,12 @@ if st.button("🚀 START MIGRATION", use_container_width=True, type="primary"):
         st.error("❌ Please upload both files")
         st.stop()
     
-    # Read files
+    # Read files - RESET FILE POINTER FIRST (critical!)
+    batch_file.seek(0)
+    trans_file.seek(0)
+    
     batch_content = batch_file.read().decode('utf-8-sig', errors='ignore')
+    trans_file.seek(0)
     trans_content = trans_file.read().decode('utf-8-sig', errors='ignore')
     
     # Parse
