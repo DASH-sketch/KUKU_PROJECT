@@ -958,3 +958,6 @@ st.markdown("""
 🐔 KUKU Farm Dashboard v3.0 | Real-time monitoring with demand intelligence
 </p>
 """, unsafe_allow_html=True)
+git add streamlit_dashboard_v3.py
+git commit -m "Fix numpy types and score breakdown errors"
+git push
