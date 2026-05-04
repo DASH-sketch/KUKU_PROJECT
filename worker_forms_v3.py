@@ -169,6 +169,22 @@ def get_expense_categories():
         return ['Feed Purchase', 'Salaries', 'Transport', 'Medicines',
                 'Equipment', 'Electricity Bill', 'Construction', 'Miscellaneous']
 
+def get_buyers():
+    try:
+        c = fresh_conn()
+        cur = c.cursor()
+        cur.execute("""
+            SELECT buyerid, buyername
+            FROM public.buyers
+            WHERE status = 'Active' OR status IS NULL
+            ORDER BY buyername ASC
+        """)
+        rows = cur.fetchall()
+        c.close()
+        return rows
+    except:
+        return []
+
 def get_feed_types():
     try:
         c = fresh_conn()
@@ -452,13 +468,34 @@ with tabs[1]:
     batches = get_active_batches()
     batch_options = {f"{b[1]}": b[0] for b in batches}
 
+    # Load buyers OUTSIDE form — dropdown populated from buyers table
+    existing_buyers = get_buyers()
+    buyer_names     = [b[1] for b in existing_buyers]
+    buyer_map       = {b[1]: b[0] for b in existing_buyers}
+    NEW_BUYER       = "➕ Add new buyer..."
+    buyer_choices   = buyer_names + [NEW_BUYER]
+
+    s_buyer_choice = st.selectbox(
+        "Customer / Buyer",
+        buyer_choices,
+        key="s_buyer_select",
+        help="Select an existing buyer or choose '➕ Add new buyer...' to register a new one"
+    )
+
+    s_new_buyer_name = ""
+    if s_buyer_choice == NEW_BUYER:
+        s_new_buyer_name = st.text_input(
+            "New Buyer Name",
+            placeholder="Type the full name of the new buyer",
+            key="s_new_buyer"
+        )
+
     with st.form("sales_form"):
         col1, col2 = st.columns(2)
 
         with col1:
             s_batch = st.selectbox("Batch", list(batch_options.keys()))
             s_date  = st.date_input("Sale Date", value=date.today())
-            s_buyer = st.text_input("Buyer Name", placeholder="e.g. Issa Center")
 
         with col2:
             s_qty   = st.number_input("Birds Sold (Quantity)", min_value=1, value=50)
@@ -472,21 +509,32 @@ with tabs[1]:
         s_by    = st.text_input("Recorded By", placeholder="Your name")
 
         if st.form_submit_button("💾 SAVE SALE", use_container_width=True):
-            if not s_buyer:
-                st.error("❌ Please enter buyer name!")
+            # Resolve final buyer name
+            resolved_buyer = s_new_buyer_name.strip() if s_buyer_choice == NEW_BUYER else s_buyer_choice
+
+            if not resolved_buyer:
+                st.error("❌ Please select or enter a buyer name!")
             elif not s_by:
                 st.error("❌ Please enter your name!")
             else:
                 try:
                     c   = fresh_conn()
                     cur = c.cursor()
-                    cur.execute("SELECT buyerid FROM public.buyers WHERE buyername = %s", (s_buyer,))
-                    result = cur.fetchone()
-                    if result:
-                        buyer_id = result[0]
+
+                    # Use known buyer_id if exists, otherwise get or create
+                    if resolved_buyer in buyer_map:
+                        buyer_id = buyer_map[resolved_buyer]
                     else:
-                        cur.execute("INSERT INTO public.buyers (buyername) VALUES (%s) RETURNING buyerid", (s_buyer,))
-                        buyer_id = cur.fetchone()[0]
+                        cur.execute("SELECT buyerid FROM public.buyers WHERE buyername = %s", (resolved_buyer,))
+                        result = cur.fetchone()
+                        if result:
+                            buyer_id = result[0]
+                        else:
+                            cur.execute(
+                                "INSERT INTO public.buyers (buyername) VALUES (%s) RETURNING buyerid",
+                                (resolved_buyer,)
+                            )
+                            buyer_id = cur.fetchone()[0]
 
                     cur.execute("""
                         INSERT INTO public.daily_sales
@@ -500,7 +548,7 @@ with tabs[1]:
                     st.markdown(f"""
                     <div class="success-box">
                         ✅ Sale recorded!<br>
-                        {s_qty} birds → {s_buyer} @ TZS {s_price:,} = TZS {s_total:,}
+                        {s_qty} birds → {resolved_buyer} @ TZS {s_price:,} = TZS {s_total:,}
                     </div>
                     """, unsafe_allow_html=True)
 
