@@ -174,7 +174,7 @@ def get_buyers():
         c = fresh_conn()
         cur = c.cursor()
         cur.execute("""
-            SELECT buyerid, buyername
+            SELECT buyerid, buyername, location
             FROM public.buyers
             WHERE status = 'Active' OR status IS NULL
             ORDER BY buyername ASC
@@ -470,23 +470,30 @@ with tabs[1]:
 
     # Load buyers OUTSIDE form — dropdown populated from buyers table
     existing_buyers = get_buyers()
-    buyer_names     = [b[1] for b in existing_buyers]
-    buyer_map       = {b[1]: b[0] for b in existing_buyers}
-    NEW_BUYER       = "➕ Add new buyer..."
-    buyer_choices   = buyer_names + [NEW_BUYER]
+    # Pair name with location to avoid confusion between same-named buyers
+    def buyer_label(b):
+        name, location = b[1], b[2] if len(b) > 2 else None
+        return f"{name} — {location}" if location else name
+
+    buyer_labels = [buyer_label(b) for b in existing_buyers]
+    # Map label → buyerid for fast lookup
+    buyer_map    = {buyer_label(b): b[0] for b in existing_buyers}
+    NEW_BUYER    = "➕ Add new customer"
+    # "Add new customer" is FIRST in the list
+    buyer_choices = [NEW_BUYER] + buyer_labels
 
     s_buyer_choice = st.selectbox(
         "Customer / Buyer",
         buyer_choices,
         key="s_buyer_select",
-        help="Select an existing buyer or choose '➕ Add new buyer...' to register a new one"
+        help="Name shown with location to avoid confusion. Select '➕ Add new customer' to register a new buyer."
     )
 
     s_new_buyer_name = ""
     if s_buyer_choice == NEW_BUYER:
         s_new_buyer_name = st.text_input(
-            "New Buyer Name",
-            placeholder="Type the full name of the new buyer",
+            "New Customer Name",
+            placeholder="Type the full name of the new customer",
             key="s_new_buyer"
         )
 
@@ -521,10 +528,11 @@ with tabs[1]:
                     c   = fresh_conn()
                     cur = c.cursor()
 
-                    # Use known buyer_id if exists, otherwise get or create
-                    if resolved_buyer in buyer_map:
-                        buyer_id = buyer_map[resolved_buyer]
+                    # Use known buyer_id if existing buyer selected (via label)
+                    if s_buyer_choice != NEW_BUYER and s_buyer_choice in buyer_map:
+                        buyer_id = buyer_map[s_buyer_choice]
                     else:
+                        # New buyer — check if name already exists, else create
                         cur.execute("SELECT buyerid FROM public.buyers WHERE buyername = %s", (resolved_buyer,))
                         result = cur.fetchone()
                         if result:
