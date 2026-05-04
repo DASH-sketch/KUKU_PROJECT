@@ -293,50 +293,55 @@ st.divider()
 # BUILD FILTER QUERIES
 # ============================================================================
 
-# Build batch filter
+# Build batch filters — correct column per table (no alias confusion)
 if selected_batch_ids:
-    batch_id_str = ','.join([str(id) for id in selected_batch_ids])
-    batch_where = f"AND ds.batchid IN ({batch_id_str})"
+    batch_id_str  = ','.join([str(i) for i in selected_batch_ids])
+    sales_batch   = f"AND ds.batchid IN ({batch_id_str})"
+    generic_batch = f"AND batchid IN ({batch_id_str})"
 else:
-    batch_where = ""
-
-# Build date filter
-date_where = f"AND ds.datesold BETWEEN '{date_start}' AND '{date_end}'"
+    sales_batch   = ""
+    generic_batch = ""
 
 # ============================================================================
 # FETCH DATA
 # ============================================================================
 
 batch_sales = fetch_data(f"""
-    SELECT ds.*, b.buyername 
+    SELECT ds.*, b.buyername
     FROM public.daily_sales ds
     LEFT JOIN public.buyers b ON ds.buyerid = b.buyerid
-    WHERE 1=1 {batch_where} {date_where}
+    WHERE 1=1
+    {sales_batch}
+    AND ds.datesold BETWEEN '{date_start}' AND '{date_end}'
     ORDER BY ds.datesold
 """)
 
 batch_expenses = fetch_data(f"""
-    SELECT * FROM public.expenses 
+    SELECT * FROM public.expenses
     WHERE category != 'Feed Purchase'
-    {batch_where} {date_where}
+    {generic_batch}
+    AND expensedate BETWEEN '{date_start}' AND '{date_end}'
 """)
 
 # Feed costs (actual from daily_feed_log)
 batch_feed_log = fetch_data(f"""
     SELECT * FROM public.daily_feed_log
-    WHERE 1=1 {batch_where}
+    WHERE 1=1
+    {generic_batch}
     AND datefed BETWEEN '{date_start}' AND '{date_end}'
 """)
 
 batch_mortality = fetch_data(f"""
     SELECT * FROM public.daily_mortality
-    WHERE 1=1 {batch_where}
+    WHERE 1=1
+    {generic_batch}
     AND daterecorded BETWEEN '{date_start}' AND '{date_end}'
 """)
 
 batch_events = fetch_data(f"""
     SELECT * FROM public.critical_events
-    WHERE 1=1 {batch_where}
+    WHERE 1=1
+    {generic_batch}
     AND eventdate BETWEEN '{date_start}' AND '{date_end}'
 """)
 
