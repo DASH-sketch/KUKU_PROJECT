@@ -135,6 +135,28 @@ p, span, div { color: var(--text-primary) !important; }
     padding: 12px !important;
 }
 
+/* Card internals */
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.card-body {
+    padding: 4px 0;
+}
+
 /* Divider */
 hr { border: none !important; height: 1px !important; background-color: var(--border-color) !important; }
 </style>
@@ -487,18 +509,106 @@ elif st.session_state.current_tab == 'operations':
 
 elif st.session_state.current_tab == 'statements':
     st.markdown("## 📄 Financial Statements")
+
+    # Per-bird calculations
+    birds = metrics['total_sold'] if metrics['total_sold'] > 0 else 1
+    gross_profit = metrics['total_revenue'] - metrics['total_feed_cost']
+    gross_margin = (gross_profit / metrics['total_revenue'] * 100) if metrics['total_revenue'] > 0 else 0
+
     st.markdown(f"""
-    **Income Statement**
-    
-    Revenue: TZS {metrics['total_revenue']:,}
-    
-    Feed Cost: TZS {metrics['total_feed_cost']:,}
-    Other Expenses: TZS {metrics['other_expenses']:,}
-    **Total Expenses: TZS {metrics['total_expenses']:,}**
-    
-    **Net Profit: TZS {metrics['profit']:,}**
-    Margin: {metrics['margin']:.1f}%
-    """)
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">Income Statement</div>
+            <span style="color:#8b949e; font-size:12px;">{len(selected_batch_ids) if selected_batch_ids else 'All'} batch(es) &nbsp;|&nbsp; {metrics['total_sold']:,} birds sold</span>
+        </div>
+        <div class="card-body">
+        <table style="width:100%; border-collapse:collapse; font-size:15px;">
+
+            <!-- REVENUE -->
+            <tr>
+                <td colspan="3" style="padding:10px 0 4px; color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.08em;">Revenue</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2d333b;">
+                <td style="padding:8px 0; color:#e6edf3;">Bird Sales</td>
+                <td style="padding:8px 0; text-align:right; color:#10b981; font-weight:600;">TZS {metrics['total_revenue']:,}</td>
+                <td style="padding:8px 0 8px 16px; text-align:right; color:#8b949e; font-size:13px;">TZS {metrics['total_revenue']//birds:,}/bird</td>
+            </tr>
+            <tr style="border-bottom:2px solid #2d333b;">
+                <td style="padding:10px 0; color:#e6edf3; font-weight:700;">GROSS REVENUE</td>
+                <td style="padding:10px 0; text-align:right; color:#10b981; font-weight:700; font-size:17px;">TZS {metrics['total_revenue']:,}</td>
+                <td></td>
+            </tr>
+
+            <!-- COST OF PRODUCTION -->
+            <tr>
+                <td colspan="3" style="padding:14px 0 4px; color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.08em;">Cost of Production</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2d333b;">
+                <td style="padding:8px 0; color:#e6edf3;">Feed Costs</td>
+                <td style="padding:8px 0; text-align:right; color:#ef4444; font-weight:600;">TZS {metrics['total_feed_cost']:,}</td>
+                <td style="padding:8px 0 8px 16px; text-align:right; color:#8b949e; font-size:13px;">TZS {metrics['total_feed_cost']//birds:,}/bird</td>
+            </tr>
+            <tr style="border-bottom:2px solid #2d333b;">
+                <td style="padding:10px 0; color:#e6edf3; font-weight:700;">GROSS PROFIT</td>
+                <td style="padding:10px 0; text-align:right; color:{'#10b981' if gross_profit >= 0 else '#ef4444'}; font-weight:700; font-size:17px;">TZS {gross_profit:,}</td>
+                <td style="padding:10px 0 10px 16px; text-align:right; color:#8b949e; font-size:13px;">Margin: {gross_margin:.1f}%</td>
+            </tr>
+
+            <!-- OPERATING EXPENSES -->
+            <tr>
+                <td colspan="3" style="padding:14px 0 4px; color:#8b949e; font-size:11px; text-transform:uppercase; letter-spacing:0.08em;">Operating Expenses</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2d333b;">
+                <td style="padding:8px 0; color:#e6edf3;">Other Expenses</td>
+                <td style="padding:8px 0; text-align:right; color:#ef4444; font-weight:600;">TZS {metrics['other_expenses']:,}</td>
+                <td style="padding:8px 0 8px 16px; text-align:right; color:#8b949e; font-size:13px;">TZS {metrics['other_expenses']//birds:,}/bird</td>
+            </tr>
+            <tr style="border-bottom:1px solid #2d333b;">
+                <td style="padding:8px 0; color:#8b949e;">Total Expenses</td>
+                <td style="padding:8px 0; text-align:right; color:#ef4444;">TZS {metrics['total_expenses']:,}</td>
+                <td></td>
+            </tr>
+
+            <!-- NET PROFIT -->
+            <tr style="border-top:2px solid #10b981; margin-top:8px;">
+                <td style="padding:16px 0 8px; color:#e6edf3; font-weight:700; font-size:18px;">NET PROFIT</td>
+                <td style="padding:16px 0 8px; text-align:right; color:{'#10b981' if metrics['profit'] >= 0 else '#ef4444'}; font-weight:800; font-size:22px;">TZS {metrics['profit']:,}</td>
+                <td style="padding:16px 0 8px 16px; text-align:right; color:#8b949e; font-size:13px;">TZS {metrics['profit']//birds:,}/bird</td>
+            </tr>
+            <tr>
+                <td style="padding:0 0 8px; color:#8b949e;">Net Margin</td>
+                <td style="padding:0 0 8px; text-align:right; color:{'#10b981' if metrics['margin'] >= 0 else '#ef4444'}; font-weight:700; font-size:16px;">{metrics['margin']:.1f}%</td>
+                <td></td>
+            </tr>
+
+        </table>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Expense breakdown bar
+    if metrics['total_expenses'] > 0:
+        feed_pct = int(metrics['total_feed_cost'] / metrics['total_expenses'] * 100) if metrics['total_expenses'] > 0 else 0
+        other_pct = 100 - feed_pct
+        st.markdown(f"""
+        <div class="card" style="margin-top:8px;">
+            <div class="card-title" style="margin-bottom:12px;">Expense Breakdown</div>
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+                <span style="color:#8b949e; font-size:13px; width:120px;">Feed</span>
+                <div style="flex:1; background:#2d333b; border-radius:4px; height:10px;">
+                    <div style="width:{feed_pct}%; background:#10b981; border-radius:4px; height:10px;"></div>
+                </div>
+                <span style="color:#e6edf3; font-size:13px; width:60px; text-align:right;">{feed_pct}%</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <span style="color:#8b949e; font-size:13px; width:120px;">Other</span>
+                <div style="flex:1; background:#2d333b; border-radius:4px; height:10px;">
+                    <div style="width:{other_pct}%; background:#f59e0b; border-radius:4px; height:10px;"></div>
+                </div>
+                <span style="color:#e6edf3; font-size:13px; width:60px; text-align:right;">{other_pct}%</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 elif st.session_state.current_tab == 'intelligence':
     st.markdown("## 🧠 Market Intelligence")
