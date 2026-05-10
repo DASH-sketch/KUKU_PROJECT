@@ -389,7 +389,7 @@ def safe_int(val):
 
 def get_metrics():
     empty = dict(total_sold=0, total_revenue=0, feed_cost=0,
-                 other_expenses=0, total_expenses=0, chick_cost=0,
+                 other_expenses=0, op_expenses=0, total_expenses=0, chick_cost=0,
                  profit=0, gross_profit=0, gross_margin=0, margin=0,
                  unique_buyers=0, concentration=0, avg_price=0, demand_score=50)
     if sales_df.empty:
@@ -928,117 +928,154 @@ elif st.session_state.current_tab == 'statements':
     try:
         st.markdown("## 📄 Financial Statements")
 
-        gross_profit = M['total_revenue'] - M['feed_cost'] - M['chick_cost']
-        gross_margin = (gross_profit / M['total_revenue'] * 100) if M['total_revenue'] > 0 else 0
-        net_color    = '#10b981' if M['profit'] >= 0 else '#ef4444'
-        gp_color     = '#10b981' if gross_profit >= 0 else '#ef4444'
+        gross_profit  = M['total_revenue'] - M['feed_cost'] - M['chick_cost']
+        gross_margin  = (gross_profit / M['total_revenue'] * 100) if M['total_revenue'] > 0 else 0
+        batch_label   = f"{len(selected_ids)} batch(es)" if selected_ids else "All batches"
+        net_color_hex = '#10b981' if M['profit'] >= 0 else '#ef4444'
+        gp_color_hex  = '#10b981' if gross_profit >= 0 else '#ef4444'
 
-        batch_label  = f"{len(selected_ids)} batch(es)" if selected_ids else "All batches"
+        # ── Income Statement as Plotly Table (always renders reliably) ──
+        labels  = [
+            'REVENUE',
+            'Bird Sales',
+            'GROSS REVENUE',
+            '',
+            'COST OF PRODUCTION',
+            'Chick Purchase',
+            'Feed Costs',
+            'GROSS PROFIT',
+            '',
+            'OPERATING EXPENSES',
+            'Other Expenses',
+            'Total Expenses',
+            '',
+            'NET PROFIT',
+            'Net Margin',
+        ]
+        amounts = [
+            '',
+            f"TZS {M['total_revenue']:,}",
+            f"TZS {M['total_revenue']:,}",
+            '',
+            '',
+            f"TZS {M['chick_cost']:,}",
+            f"TZS {M['feed_cost']:,}",
+            f"TZS {gross_profit:,}",
+            '',
+            '',
+            f"TZS {M['op_expenses']:,}",
+            f"TZS {M['total_expenses']:,}",
+            '',
+            f"TZS {M['profit']:,}",
+            f"{M['margin']:.1f}%",
+        ]
+        per_bird = [
+            '',
+            f"TZS {M['total_revenue']//birds:,}/bird",
+            '',
+            '',
+            '',
+            f"TZS {M['chick_cost']//birds:,}/bird",
+            f"TZS {M['feed_cost']//birds:,}/bird",
+            f"Margin: {gross_margin:.1f}%",
+            '',
+            '',
+            f"TZS {M['op_expenses']//birds:,}/bird",
+            '',
+            '',
+            f"TZS {M['profit']//birds:,}/bird",
+            '',
+        ]
 
-        st.markdown(f"""
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">Income Statement</div>
-                <span style="color:#8b949e;font-size:12px;">{batch_label} &nbsp;|&nbsp; {M['total_sold']:,} birds sold &nbsp;|&nbsp; {date_start} → {date_end}</span>
-            </div>
-            <div class="card-body">
-            <table style="width:100%;border-collapse:collapse;font-size:15px;">
+        # Row colours
+        section_rows  = {0, 4, 9}    # section headers — subtle gray
+        total_rows    = {2, 7, 11}   # subtotals — slightly lighter
+        net_row       = {13, 14}     # net profit rows
 
-                <tr><td colspan="3" style="padding:8px 0 4px;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;">Revenue</td></tr>
-                <tr style="border-bottom:1px solid #2d333b;">
-                    <td style="padding:8px 0;color:#e6edf3;">Bird Sales</td>
-                    <td style="padding:8px 0;text-align:right;color:#10b981;font-weight:600;">TZS {M['total_revenue']:,}</td>
-                    <td style="padding:8px 0 8px 16px;text-align:right;color:#8b949e;font-size:13px;">TZS {M['total_revenue']//birds:,}/bird</td>
-                </tr>
-                <tr style="border-bottom:2px solid #2d333b;">
-                    <td style="padding:10px 0;color:#e6edf3;font-weight:700;">GROSS REVENUE</td>
-                    <td style="padding:10px 0;text-align:right;color:#10b981;font-weight:700;font-size:17px;">TZS {M['total_revenue']:,}</td>
-                    <td></td>
-                </tr>
+        row_fill  = []
+        font_cols = []
+        for i, lbl in enumerate(labels):
+            if i in section_rows:
+                row_fill.append('#0f1427')
+                font_cols.append('#8b949e')
+            elif i in net_row:
+                row_fill.append('#0d2e1f')
+                font_cols.append(net_color_hex)
+            elif i in total_rows:
+                row_fill.append('#131b35')
+                font_cols.append('#e6edf3')
+            elif lbl == '':
+                row_fill.append('#0a0e27')
+                font_cols.append('#0a0e27')
+            else:
+                row_fill.append('#1a1f3a')
+                font_cols.append('#e6edf3')
 
-                <tr><td colspan="3" style="padding:14px 0 4px;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;">Cost of Production</td></tr>
-                <tr style="border-bottom:1px solid #2d333b;">
-                    <td style="padding:8px 0;color:#e6edf3;">Chick Purchase</td>
-                    <td style="padding:8px 0;text-align:right;color:#ef4444;font-weight:600;">TZS {M['chick_cost']:,}</td>
-                    <td style="padding:8px 0 8px 16px;text-align:right;color:#8b949e;font-size:13px;">TZS {M['chick_cost']//birds:,}/bird</td>
-                </tr>
-                <tr style="border-bottom:1px solid #2d333b;">
-                    <td style="padding:8px 0;color:#e6edf3;">Feed Costs</td>
-                    <td style="padding:8px 0;text-align:right;color:#ef4444;font-weight:600;">TZS {M['feed_cost']:,}</td>
-                    <td style="padding:8px 0 8px 16px;text-align:right;color:#8b949e;font-size:13px;">TZS {M['feed_cost']//birds:,}/bird</td>
-                </tr>
-                <tr style="border-bottom:2px solid #2d333b;">
-                    <td style="padding:10px 0;color:#e6edf3;font-weight:700;">GROSS PROFIT</td>
-                    <td style="padding:10px 0;text-align:right;color:{gp_color};font-weight:700;font-size:17px;">TZS {gross_profit:,}</td>
-                    <td style="padding:10px 0 10px 16px;text-align:right;color:#8b949e;font-size:13px;">Margin: {gross_margin:.1f}%</td>
-                </tr>
-
-                <tr><td colspan="3" style="padding:14px 0 4px;color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;">Operating Expenses</td></tr>
-                <tr style="border-bottom:1px solid #2d333b;">
-                    <td style="padding:8px 0;color:#e6edf3;">Other Expenses</td>
-                    <td style="padding:8px 0;text-align:right;color:#ef4444;font-weight:600;">TZS {M['op_expenses']:,}</td>
-                    <td style="padding:8px 0 8px 16px;text-align:right;color:#8b949e;font-size:13px;">TZS {M['op_expenses']//birds:,}/bird</td>
-                </tr>
-                <tr style="border-bottom:1px solid #2d333b;">
-                    <td style="padding:8px 0;color:#8b949e;">Total Expenses</td>
-                    <td style="padding:8px 0;text-align:right;color:#ef4444;">TZS {M['total_expenses']:,}</td>
-                    <td></td>
-                </tr>
-
-                <tr>
-                    <td style="padding:16px 0 8px;color:#e6edf3;font-weight:700;font-size:18px;border-top:2px solid #10b981;">NET PROFIT</td>
-                    <td style="padding:16px 0 8px;text-align:right;color:{net_color};font-weight:800;font-size:22px;border-top:2px solid #10b981;">TZS {M['profit']:,}</td>
-                    <td style="padding:16px 0 8px 16px;text-align:right;color:#8b949e;font-size:13px;border-top:2px solid #10b981;">TZS {M['profit']//birds:,}/bird</td>
-                </tr>
-                <tr>
-                    <td style="padding:0 0 8px;color:#8b949e;">Net Margin</td>
-                    <td style="padding:0 0 8px;text-align:right;color:{net_color};font-weight:700;font-size:16px;">{M['margin']:.1f}%</td>
-                    <td></td>
-                </tr>
-
-            </table>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        fig = go.Figure(go.Table(
+            columnwidth=[3, 2, 2],
+            header=dict(
+                values=[
+                    f'<b>{batch_label} | {M["total_sold"]:,} birds | {date_start} → {date_end}</b>',
+                    '<b>Amount (TZS)</b>',
+                    '<b>Per Bird</b>'
+                ],
+                fill_color='#0f1427',
+                font=dict(color=['#10b981','#8b949e','#8b949e'], size=[13,12,12]),
+                line_color='#2d333b',
+                align=['left','right','right'],
+                height=36
+            ),
+            cells=dict(
+                values=[labels, amounts, per_bird],
+                fill_color=[row_fill, row_fill, row_fill],
+                font=dict(color=[font_cols, font_cols, font_cols], size=13),
+                line_color='#2d333b',
+                align=['left','right','right'],
+                height=32
+            )
+        ))
+        fig.update_layout(
+            paper_bgcolor='#1a1f3a',
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=580
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
         # ── Expense breakdown bars ──
         if M['total_expenses'] > 0:
+            st.markdown("### Expense Breakdown")
             items = [
-                ("Chick Purchase", M['chick_cost'], '#3b82f6'),
-                ("Feed",           M['feed_cost'],   '#10b981'),
-                ("Operating",      M['op_expenses'], '#f59e0b'),
+                ("Chick Purchase", M['chick_cost'],   '#3b82f6'),
+                ("Feed Costs",     M['feed_cost'],     '#10b981'),
+                ("Operating",      M['op_expenses'],   '#f59e0b'),
             ]
-            html = '<div class="card" style="margin-top:8px;"><div class="card-title" style="margin-bottom:16px;">Expense Breakdown</div>'
             for name, amt, col in items:
                 if amt > 0:
-                    pct = int(amt / M['total_expenses'] * 100)
-                    html += f"""
-                    <div style="margin-bottom:12px;">
-                      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                        <span style="color:#e6edf3;font-size:13px;">{name}</span>
-                        <span style="color:#8b949e;font-size:13px;">TZS {amt:,} &nbsp;({pct}%)</span>
-                      </div>
-                      <div style="background:#2d333b;border-radius:4px;height:8px;">
-                        <div style="width:{pct}%;background:{col};border-radius:4px;height:8px;"></div>
-                      </div>
-                    </div>"""
-            html += '</div>'
-            st.markdown(html, unsafe_allow_html=True)
+                    pct = amt / M['total_expenses'] * 100
+                    c1, c2, c3 = st.columns([2, 4, 1])
+                    with c1:
+                        st.markdown(
+                            f"<p style='color:#e6edf3;font-size:13px;margin:6px 0;'>{name}</p>",
+                            unsafe_allow_html=True
+                        )
+                    with c2:
+                        st.progress(int(pct))
+                    with c3:
+                        st.markdown(
+                            f"<p style='color:#8b949e;font-size:12px;margin:6px 0;'>{pct:.0f}%</p>",
+                            unsafe_allow_html=True
+                        )
 
         # ── Expense detail table ──
         if not expenses_df.empty:
             st.markdown("### Expense Detail")
-            st.dataframe(
-                expenses_df[['expensedate','category','description','amount']].sort_values('expensedate', ascending=False),
-                use_container_width=True, hide_index=True
-            )
+            disp = expenses_df[['expensedate','category','description','amount']].copy()
+            disp = disp.sort_values('expensedate', ascending=False)
+            disp['amount'] = disp['amount'].apply(lambda x: f"TZS {int(x):,}")
+            st.dataframe(disp, use_container_width=True, hide_index=True)
 
     except Exception as e:
         st.error(f"Statements error: {e}")
-
-# ============================================================================
-# TAB: INTELLIGENCE
-# ============================================================================
 
 elif st.session_state.current_tab == 'intelligence':
     try:
