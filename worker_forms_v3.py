@@ -196,10 +196,10 @@ def get_feed_types():
     except:
         return [(1, 'Starter'), (2, 'Grower'), (3, 'Finisher')]
 
-def get_batch_feed_unit_cost(batchid):
+def get_batch_feed_unit_cost(batchid, feedid):
     """
-    Fetch most recent feed purchase for this batch from expenses table.
-    Uses: category='Feed Purchase', quantity=bags, unit_price=per bag, amount=total
+    Fetch most recent feed purchase price for this batch + feed type
+    from batch_feed_prices table (populated when feed purchase is recorded).
     Returns dict with unit_cost_per_kg and purchase info, or None.
     """
     try:
@@ -207,28 +207,27 @@ def get_batch_feed_unit_cost(batchid):
         cur = c.cursor()
         cur.execute("""
             SELECT
-                ROUND((amount::numeric / (quantity * 50))::numeric, 0) as unit_cost_per_kg,
-                expensedate,
-                quantity as bags,
-                ROUND(unit_price::numeric) as price_per_bag,
-                ROUND(amount::numeric) as total_cost
-            FROM public.expenses
-            WHERE batchid = %s
-            AND category = 'Feed Purchase'
-            AND quantity IS NOT NULL
-            AND quantity > 0
-            ORDER BY expensedate DESC
+                bfp.unit_cost_per_kg,
+                bfp.purchase_date,
+                e.quantity   AS bags,
+                e.unit_price AS price_per_bag,
+                e.amount     AS total_cost
+            FROM public.batch_feed_prices bfp
+            LEFT JOIN public.expenses e ON bfp.expense_id = e.expense_id
+            WHERE bfp.batchid = %s
+            AND   bfp.feedid  = %s
+            ORDER BY bfp.purchase_date DESC
             LIMIT 1
-        """, [batchid])
+        """, [batchid, feedid])
         row = cur.fetchone()
         c.close()
         if row:
             return {
                 'unit_cost_per_kg': int(row[0]),
-                'purchase_date': row[1],
-                'bags': int(row[2]),
-                'price_per_bag': int(row[3]),
-                'total_cost': int(row[4])
+                'purchase_date':    row[1],
+                'bags':             int(row[2]) if row[2] else None,
+                'price_per_bag':    int(row[3]) if row[3] else None,
+                'total_cost':       int(row[4]) if row[4] else None,
             }
         return None
     except:
@@ -587,42 +586,50 @@ with tabs[2]:
     # Pre-check: fetch cost before showing form
     fl_batch_label = st.selectbox("Batch", list(batch_options_f.keys()), key="fl_batch_select")
     fl_batch_id    = batch_options_f[fl_batch_label]
-    feed_cost_info = get_batch_feed_unit_cost(fl_batch_id)
+
+    # Feed type chosen OUTSIDE form so we can fetch price before showing the form
+    f_type = st.selectbox("Feed Type", list(feed_options.keys()), key="fl_feed_type")
+    f_feedid = feed_options[f_type]
+
+    feed_cost_info = get_batch_feed_unit_cost(fl_batch_id, f_feedid)
 
     if not feed_cost_info:
         st.markdown(f"""
         <div class="warn-box">
-        ⚠️ <strong>No feed purchase found for {fl_batch_label}</strong><br><br>
-        To record daily feed, you must first record a feed purchase for this batch.<br>
-        Go to the <strong>💸 Expenses</strong> tab → select category <strong>Feed Purchase</strong>
-        → enter bags and unit price for this batch.
+        ⚠️ <strong>No {f_type} purchase found for {fl_batch_label}</strong><br><br>
+        To record daily feed you must first record a feed purchase for this batch and feed type.<br>
+        Go to the <strong>💸 Expenses</strong> tab → Category: <strong>Feed Purchase</strong>
+        → Feed Type: <strong>{f_type}</strong> → enter bags and price per bag.
         </div>
         """, unsafe_allow_html=True)
     else:
-        unit_cost = feed_cost_info['unit_cost_per_kg']
-        st.info(f"📦 Using {fl_batch_label}'s feed purchase: **TZS {unit_cost:,}/kg** "
-                f"({feed_cost_info['bags']} bags @ TZS {feed_cost_info['price_per_bag']:,}/bag "
-                f"— purchased {feed_cost_info['purchase_date']})")
+        unit_cost  = feed_cost_info['unit_cost_per_kg']
+        bags_info  = f"{feed_cost_info['bags']} bags @ TZS {feed_cost_info['price_per_bag']:,}/bag — " if feed_cost_info['bags'] else ""
+        st.markdown(f"""
+        <div style="background:#0d2e1f;border:1px solid #10B981;border-radius:8px;padding:12px;margin-bottom:12px;">
+            <span style="color:#94A3B8;font-size:12px;">PRICE SOURCE</span><br>
+            <span style="color:#10B981;font-weight:600;">{f_type} for {fl_batch_label.split('(')[0].strip()}</span>
+            <span style="color:#94A3B8;font-size:13px;"> — {bags_info}TZS {unit_cost:,}/kg (purchased {feed_cost_info['purchase_date']})</span>
+        </div>
+        """, unsafe_allow_html=True)
 
         with st.form("feed_form"):
             col1, col2 = st.columns(2)
 
             with col1:
-                f_date = st.date_input("Date", value=date.today())
-                f_type = st.selectbox("Feed Type", list(feed_options.keys()))
+                f_date  = st.date_input("Date", value=date.today())
 
             with col2:
-                f_qty  = st.number_input("Quantity (kg)", min_value=0.1, value=25.0, step=0.5)
-                f_by   = st.text_input("Recorded By", placeholder="Your name")
+                f_qty   = st.number_input("Quantity (kg)", min_value=0.1, value=25.0, step=0.5)
+                f_by    = st.text_input("Recorded By", placeholder="Your name")
 
             f_notes = st.text_area("Notes", placeholder="Any issues with feed quality, delivery, etc...")
 
-            # Show calculated cost preview inside form
             f_calculated_cost = f_qty * unit_cost
             st.markdown(f"""
-            <div style="background:#0d2e1f; border:1px solid #10B981; border-radius:8px; padding:12px; margin-top:8px;">
-                <span style="color:#94A3B8; font-size:12px;">AUTO-CALCULATED COST</span><br>
-                <span style="color:#10B981; font-size:20px; font-weight:700;">
+            <div style="background:#0d2e1f;border:1px solid #10B981;border-radius:8px;padding:12px;margin-top:8px;">
+                <span style="color:#94A3B8;font-size:12px;">AUTO-CALCULATED COST</span><br>
+                <span style="color:#10B981;font-size:20px;font-weight:700;">
                     {f_qty:.1f}kg × TZS {unit_cost:,} = TZS {f_calculated_cost:,.0f}
                 </span>
             </div>
@@ -639,11 +646,8 @@ with tabs[2]:
                             INSERT INTO public.daily_feed_log
                             (batchid, datefed, feedtypeid, quantitykg, feedcost, notes)
                             VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (fl_batch_id, f_date,
-                              feed_options[f_type],
-                              f_qty,
-                              int(f_calculated_cost),
-                              f_notes))
+                        """, (fl_batch_id, f_date, f_feedid,
+                              f_qty, int(f_calculated_cost), f_notes))
                         c.commit()
                         c.close()
 
@@ -728,30 +732,51 @@ with tabs[4]:
     st.markdown("""
     <div class="form-header">
         <h2>💸 Expense Entry</h2>
-        <p>Record farm expenses — enter quantity & unit price when available for auto-calculation</p>
+        <p>Record farm expenses — for Feed Purchase, select feed type to auto-save price per kg</p>
     </div>
     """, unsafe_allow_html=True)
 
     batches          = get_active_batches()
     batch_options_ex = {"No specific batch": None}
     batch_options_ex.update({f"{b[1]}": b[0] for b in batches})
-    categories = get_expense_categories()
+    categories       = get_expense_categories()
+    feed_types_ex    = get_feed_types()
+    feed_options_ex  = {f[1]: f[0] for f in feed_types_ex}
+
+    # Category + feed type selectors OUTSIDE form so feed type reacts to category change
+    e_category_pre = st.selectbox(
+        "Category",
+        categories,
+        key="e_cat_pre"
+    )
+
+    e_feedtype_id   = None
+    e_feedtype_name = None
+    if e_category_pre == "Feed Purchase":
+        e_feedtype_name = st.selectbox(
+            "Feed Type",
+            list(feed_options_ex.keys()),
+            key="e_feedtype_pre",
+            help="Which feed type was purchased? Price per kg will be saved to batch_feed_prices."
+        )
+        e_feedtype_id = feed_options_ex[e_feedtype_name]
 
     with st.form("expense_form"):
         col1, col2 = st.columns(2)
 
         with col1:
-            e_date     = st.date_input("Expense Date", value=date.today())
-            e_category = st.selectbox("Category", categories)
-            e_batch    = st.selectbox("Related Batch (Optional)", list(batch_options_ex.keys()))
+            e_date  = st.date_input("Expense Date", value=date.today())
+            e_batch = st.selectbox(
+                "Related Batch" + (" (Required for Feed Purchase)" if e_category_pre == "Feed Purchase" else " (Optional)"),
+                list(batch_options_ex.keys())
+            )
 
         with col2:
-            e_vendor = st.text_input("Vendor / Supplier",
-                                     placeholder="Who received the money?")
+            e_vendor = st.text_input("Vendor / Supplier", placeholder="Who received the money?")
             e_by     = st.text_input("Recorded By", placeholder="Your name")
 
-        e_desc = st.text_input("Description",
-            placeholder="e.g. Starter feed 10 bags, Vaccines 3 packages, Labor 5 days")
+        desc_hint = f"e.g. 10 bags {e_feedtype_name}" if e_category_pre == "Feed Purchase" and e_feedtype_name else "e.g. Vaccines 3 packages, Labor 5 days"
+        e_desc = st.text_input("Description", placeholder=desc_hint)
 
         st.markdown("---")
         st.markdown("**Quantity & Pricing** *(optional — fill for auto-calculation)*")
@@ -762,90 +787,96 @@ with tabs[4]:
             e_qty = st.number_input(
                 "Quantity",
                 min_value=0.0, value=None, step=1.0,
-                placeholder="e.g. 10",
-                help="Number of bags, packages, pieces, days, etc."
+                placeholder="e.g. 10"
             )
-
         with col2:
-            # Show unit hint for Feed Purchase
-            unit_hint = "bags" if e_category == "Feed Purchase" else "e.g. bags, pcs, pkgs, days"
-            e_unit = st.text_input(
-                "Unit",
-                placeholder=unit_hint,
-                help="What is the unit? bags, pieces, packages, days, etc."
-            )
-
+            unit_hint = "bags (50kg each)" if e_category_pre == "Feed Purchase" else "bags, pcs, days..."
+            e_unit = st.text_input("Unit", placeholder=unit_hint)
         with col3:
             e_unit_price = st.number_input(
                 "Unit Price (TZS)",
                 min_value=0.0, value=None, step=100.0,
-                placeholder="e.g. 16600",
-                help="Price per single unit"
+                placeholder="e.g. 16600"
             )
 
-        # Auto-calculate or manual amount
+        # Auto-calculate amount
         if e_qty and e_qty > 0 and e_unit_price and e_unit_price > 0:
             auto_amount = int(e_qty * e_unit_price)
+            extra_info  = ""
+            if e_category_pre == "Feed Purchase":
+                kg_total     = int(e_qty * 50)
+                cost_per_kg  = int(e_unit_price / 50)
+                extra_info   = f"<br><span style='color:#94A3B8;font-size:11px;'>{int(e_qty)} bags × 50kg = {kg_total}kg &nbsp;|&nbsp; TZS {cost_per_kg:,}/kg saved to {e_feedtype_name} price</span>"
             st.markdown(f"""
-            <div style="background:#0d2e1f; border:1px solid #10B981; border-radius:8px;
-                        padding:12px; margin:8px 0;">
-                <span style="color:#94A3B8; font-size:12px;">AUTO-CALCULATED AMOUNT</span><br>
-                <span style="color:#10B981; font-size:20px; font-weight:700;">
-                    {e_qty:.0f} {e_unit} × TZS {e_unit_price:,.0f} = TZS {auto_amount:,}
-                </span>
-                {"<br><span style='color:#94A3B8; font-size:11px;'>Feed Purchase: " + str(int(e_qty)) + " bags × 50kg = " + str(int(e_qty * 50)) + "kg total</span>" if e_category == "Feed Purchase" else ""}
+            <div style="background:#0d2e1f;border:1px solid #10B981;border-radius:8px;padding:12px;margin:8px 0;">
+                <span style="color:#94A3B8;font-size:12px;">AUTO-CALCULATED AMOUNT</span><br>
+                <span style="color:#10B981;font-size:20px;font-weight:700;">
+                    {e_qty:.0f} × TZS {e_unit_price:,.0f} = TZS {auto_amount:,}
+                </span>{extra_info}
             </div>
             """, unsafe_allow_html=True)
             e_amount_final = auto_amount
-            # Hidden placeholder — amount is auto-calculated
-            st.number_input("Amount (TZS)", value=auto_amount, disabled=True,
-                           help="Auto-calculated from Quantity × Unit Price")
+            st.number_input("Amount (TZS)", value=auto_amount, disabled=True)
         else:
             e_amount_final = None
-            e_amount_manual = st.number_input(
-                "Amount (TZS)",
-                min_value=0, value=0, step=500,
-                help="Enter total amount (or fill Quantity + Unit Price above for auto-calculation)"
-            )
+            e_amount_manual = st.number_input("Amount (TZS)", min_value=0, value=0, step=500)
             if e_amount_manual > 0:
                 e_amount_final = e_amount_manual
 
         e_notes = st.text_area("Notes", placeholder="Any additional details...")
 
         if st.form_submit_button("💾 SAVE EXPENSE", use_container_width=True):
+            batch_id_ex = batch_options_ex[e_batch]
             if not e_desc:
                 st.error("❌ Please enter a description!")
             elif not e_amount_final or e_amount_final <= 0:
-                st.error("❌ Please enter a valid amount (or fill Quantity × Unit Price)!")
+                st.error("❌ Please enter a valid amount!")
             elif not e_by:
                 st.error("❌ Please enter your name!")
+            elif e_category_pre == "Feed Purchase" and batch_id_ex is None:
+                st.error("❌ Feed Purchase must be linked to a batch!")
+            elif e_category_pre == "Feed Purchase" and not e_feedtype_id:
+                st.error("❌ Please select a feed type!")
             else:
                 try:
                     c   = fresh_conn()
                     cur = c.cursor()
 
-                    batch_id_ex = batch_options_ex[e_batch]
-
                     cur.execute("""
                         INSERT INTO public.expenses
                         (expensedate, category, description, amount,
-                         quantity, unit_price,
-                         receivedfrom, batchid, notes)
+                         quantity, unit_price, receivedfrom, batchid, notes)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING expense_id
                     """, (
-                        e_date, e_category, e_desc,
+                        e_date, e_category_pre, e_desc,
                         e_amount_final,
                         float(e_qty) if e_qty else None,
                         float(e_unit_price) if e_unit_price else None,
                         e_vendor, batch_id_ex, e_notes
                     ))
+                    new_expense_id = cur.fetchone()[0]
+
+                    # Feed Purchase → also save price to batch_feed_prices
+                    if e_category_pre == "Feed Purchase" and e_feedtype_id and e_qty and e_qty > 0 and e_unit_price and e_unit_price > 0:
+                        unit_cost_kg = round(float(e_unit_price) / 50, 2)
+                        cur.execute("""
+                            INSERT INTO public.batch_feed_prices
+                            (batchid, feedid, unit_cost_per_kg, purchase_date, expense_id)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (batch_id_ex, e_feedtype_id, unit_cost_kg, e_date, new_expense_id))
+
                     c.commit()
                     c.close()
+
+                    extra_msg = ""
+                    if e_category_pre == "Feed Purchase" and e_qty and e_unit_price:
+                        extra_msg = f"<br>📊 {e_feedtype_name} price saved: TZS {int(e_unit_price/50):,}/kg for this batch"
 
                     st.markdown(f"""
                     <div class="success-box">
                         ✅ Expense saved!<br>
-                        {e_category}: {e_desc} → TZS {e_amount_final:,}
+                        {e_category_pre}: {e_desc} → TZS {e_amount_final:,}{extra_msg}
                     </div>
                     """, unsafe_allow_html=True)
 
