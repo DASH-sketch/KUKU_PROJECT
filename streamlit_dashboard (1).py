@@ -156,7 +156,6 @@ PLOT_LAYOUT = dict(
     paper_bgcolor='#1a1f3a',
     plot_bgcolor='#0a0e27',
     font=dict(color='#e6edf3', size=12),
-    margin=dict(l=10, r=10, t=30, b=10),
     legend=dict(bgcolor='rgba(0,0,0,0)', bordercolor='#2d333b'),
     colorway=['#10b981','#f59e0b','#ef4444','#3b82f6','#8b5cf6','#ec4899'],
 )
@@ -337,12 +336,19 @@ sales_df = fetch_data(f"""
 """)
 
 # Expenses: batch-specific + farm-wide (NULL batchid), exclude Feed Purchase
+# batchid IN (selected) catches expenses explicitly linked to this batch
+# batchid IS NULL catches farm-wide expenses (electricity, shared costs)
+# Expenses under OTHER batches are correctly excluded to prevent mixing
 expenses_df = fetch_data(f"""
     SELECT expense_id, expensedate, category, description, amount, batchid
     FROM public.expenses
     WHERE category != 'Feed Purchase'
-    {batch_filter}
+    AND (
+        {f"batchid IN ({ids_str})" if selected_ids else "1=1"}
+        OR batchid IS NULL
+    )
     AND expensedate BETWEEN {ds} AND {de}
+    ORDER BY expensedate DESC
 """)
 
 # Feed log: actual costs from daily feed log (strict batch only)
@@ -928,151 +934,162 @@ elif st.session_state.current_tab == 'statements':
     try:
         st.markdown("## 📄 Financial Statements")
 
-        gross_profit  = M['total_revenue'] - M['feed_cost'] - M['chick_cost']
-        gross_margin  = (gross_profit / M['total_revenue'] * 100) if M['total_revenue'] > 0 else 0
-        batch_label   = f"{len(selected_ids)} batch(es)" if selected_ids else "All batches"
-        net_color_hex = '#10b981' if M['profit'] >= 0 else '#ef4444'
-        gp_color_hex  = '#10b981' if gross_profit >= 0 else '#ef4444'
+        gross_profit = M['total_revenue'] - M['feed_cost'] - M['chick_cost']
+        gross_margin = (gross_profit / M['total_revenue'] * 100) if M['total_revenue'] > 0 else 0
+        net_color    = '#10b981' if M['profit'] >= 0 else '#ef4444'
+        gp_color     = '#10b981' if gross_profit >= 0 else '#ef4444'
+        batch_label  = f"{len(selected_ids)} batch(es)" if selected_ids else "All batches"
 
-        # ── Income Statement as Plotly Table (always renders reliably) ──
-        labels  = [
-            'REVENUE',
-            'Bird Sales',
-            'GROSS REVENUE',
-            '',
-            'COST OF PRODUCTION',
-            'Chick Purchase',
-            'Feed Costs',
-            'GROSS PROFIT',
-            '',
-            'OPERATING EXPENSES',
-            'Other Expenses',
-            'Total Expenses',
-            '',
-            'NET PROFIT',
-            'Net Margin',
-        ]
-        amounts = [
-            '',
-            f"TZS {M['total_revenue']:,}",
-            f"TZS {M['total_revenue']:,}",
-            '',
-            '',
-            f"TZS {M['chick_cost']:,}",
-            f"TZS {M['feed_cost']:,}",
-            f"TZS {gross_profit:,}",
-            '',
-            '',
-            f"TZS {M['op_expenses']:,}",
-            f"TZS {M['total_expenses']:,}",
-            '',
-            f"TZS {M['profit']:,}",
-            f"{M['margin']:.1f}%",
-        ]
-        per_bird = [
-            '',
-            f"TZS {M['total_revenue']//birds:,}/bird",
-            '',
-            '',
-            '',
-            f"TZS {M['chick_cost']//birds:,}/bird",
-            f"TZS {M['feed_cost']//birds:,}/bird",
-            f"Margin: {gross_margin:.1f}%",
-            '',
-            '',
-            f"TZS {M['op_expenses']//birds:,}/bird",
-            '',
-            '',
-            f"TZS {M['profit']//birds:,}/bird",
-            '',
-        ]
+        # ── Build category breakdown rows dynamically ──
+        op_category_rows = []
+        if not expenses_df.empty:
+            # Exclude chick purchases (already in COGS section)
+            op_mask = ~expenses_df['category'].str.lower().str.contains('chick', na=False)
+            op_df   = expenses_df[op_mask]
+            if not op_df.empty:
+                cat_sums = op_df.groupby('category')['amount'].sum().sort_values(ascending=False)
+                for cat, amt in cat_sums.items():
+                    op_category_rows.append((f"  {cat}", int(amt)))
 
-        # Row colours
-        section_rows  = {0, 4, 9}    # section headers — subtle gray
-        total_rows    = {2, 7, 11}   # subtotals — slightly lighter
-        net_row       = {13, 14}     # net profit rows
+        # ── Build Plotly table rows ──
+        labels, amounts, per_bird_col = [], [], []
 
-        row_fill  = []
-        font_cols = []
-        for i, lbl in enumerate(labels):
-            if i in section_rows:
-                row_fill.append('#0f1427')
-                font_cols.append('#8b949e')
-            elif i in net_row:
-                row_fill.append('#0d2e1f')
-                font_cols.append(net_color_hex)
-            elif i in total_rows:
-                row_fill.append('#131b35')
-                font_cols.append('#e6edf3')
-            elif lbl == '':
-                row_fill.append('#0a0e27')
-                font_cols.append('#0a0e27')
+        def add_row(label, amount_str, pb_str=""):
+            labels.append(label)
+            amounts.append(amount_str)
+            per_bird_col.append(pb_str)
+
+        def add_section(title):
+            add_row(title, "", "")
+
+        def add_spacer():
+            add_row("", "", "")
+
+        # REVENUE
+        add_section("REVENUE")
+        add_row("  Bird Sales",
+                f"TZS {M['total_revenue']:,}",
+                f"TZS {M['total_revenue']//birds:,}/bird")
+        add_row("GROSS REVENUE",
+                f"TZS {M['total_revenue']:,}", "")
+        add_spacer()
+
+        # COST OF PRODUCTION
+        add_section("COST OF PRODUCTION")
+        add_row("  Chick Purchase",
+                f"TZS {M['chick_cost']:,}",
+                f"TZS {M['chick_cost']//birds:,}/bird")
+        add_row("  Feed Costs",
+                f"TZS {M['feed_cost']:,}",
+                f"TZS {M['feed_cost']//birds:,}/bird")
+        add_row("GROSS PROFIT",
+                f"TZS {gross_profit:,}",
+                f"Margin: {gross_margin:.1f}%")
+        add_spacer()
+
+        # OPERATING EXPENSES — category by category
+        add_section("OPERATING EXPENSES")
+        for cat_name, cat_amt in op_category_rows:
+            add_row(cat_name,
+                    f"TZS {cat_amt:,}",
+                    f"TZS {cat_amt//birds:,}/bird")
+        add_row("TOTAL OPERATING",
+                f"TZS {M['op_expenses']:,}", "")
+        add_spacer()
+
+        # TOTALS
+        add_row("Total All Expenses",
+                f"TZS {M['total_expenses']:,}", "")
+        add_spacer()
+
+        # NET PROFIT
+        add_row("NET PROFIT",
+                f"TZS {M['profit']:,}",
+                f"TZS {M['profit']//birds:,}/bird")
+        add_row("Net Margin",
+                f"{M['margin']:.1f}%", "")
+
+        # ── Row colours ──
+        section_titles = {"REVENUE","COST OF PRODUCTION","OPERATING EXPENSES"}
+        total_titles   = {"GROSS REVENUE","GROSS PROFIT","TOTAL OPERATING","Total All Expenses"}
+        net_titles     = {"NET PROFIT","Net Margin"}
+
+        row_fill, font_col = [], []
+        for lbl in labels:
+            stripped = lbl.strip()
+            if stripped == "":
+                row_fill.append('#0a0e27'); font_col.append('#0a0e27')
+            elif stripped in section_titles:
+                row_fill.append('#0f1427'); font_col.append('#8b949e')
+            elif stripped in net_titles:
+                row_fill.append('#0d2e1f'); font_col.append(net_color)
+            elif stripped in total_titles:
+                row_fill.append('#131b35'); font_col.append('#ffffff')
+            elif stripped in {"GROSS PROFIT"}:
+                row_fill.append('#131b35'); font_col.append(gp_color)
             else:
-                row_fill.append('#1a1f3a')
-                font_cols.append('#e6edf3')
+                row_fill.append('#1a1f3a'); font_col.append('#e6edf3')
 
         fig = go.Figure(go.Table(
             columnwidth=[3, 2, 2],
             header=dict(
                 values=[
-                    f'<b>{batch_label} | {M["total_sold"]:,} birds | {date_start} → {date_end}</b>',
-                    '<b>Amount (TZS)</b>',
+                    f'<b>{batch_label}  |  {M["total_sold"]:,} birds sold  |  {date_start} → {date_end}</b>',
+                    '<b>Amount</b>',
                     '<b>Per Bird</b>'
                 ],
                 fill_color='#0f1427',
-                font=dict(color=['#10b981','#8b949e','#8b949e'], size=[13,12,12]),
+                font=dict(color=['#10b981','#8b949e','#8b949e'], size=13),
                 line_color='#2d333b',
                 align=['left','right','right'],
                 height=36
             ),
             cells=dict(
-                values=[labels, amounts, per_bird],
+                values=[labels, amounts, per_bird_col],
                 fill_color=[row_fill, row_fill, row_fill],
-                font=dict(color=[font_cols, font_cols, font_cols], size=13),
+                font=dict(color=[font_col, font_col, font_col], size=13),
                 line_color='#2d333b',
                 align=['left','right','right'],
-                height=32
+                height=30
             )
         ))
+
+        n_rows  = len(labels)
         fig.update_layout(
             paper_bgcolor='#1a1f3a',
             margin=dict(l=0, r=0, t=0, b=0),
-            height=580
+            height=max(500, n_rows * 30 + 60)
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # ── Expense breakdown bars ──
-        if M['total_expenses'] > 0:
-            st.markdown("### Expense Breakdown")
-            items = [
-                ("Chick Purchase", M['chick_cost'],   '#3b82f6'),
-                ("Feed Costs",     M['feed_cost'],     '#10b981'),
-                ("Operating",      M['op_expenses'],   '#f59e0b'),
-            ]
-            for name, amt, col in items:
-                if amt > 0:
-                    pct = amt / M['total_expenses'] * 100
-                    c1, c2, c3 = st.columns([2, 4, 1])
-                    with c1:
-                        st.markdown(
-                            f"<p style='color:#e6edf3;font-size:13px;margin:6px 0;'>{name}</p>",
-                            unsafe_allow_html=True
-                        )
-                    with c2:
-                        st.progress(int(pct))
-                    with c3:
-                        st.markdown(
-                            f"<p style='color:#8b949e;font-size:12px;margin:6px 0;'>{pct:.0f}%</p>",
-                            unsafe_allow_html=True
-                        )
+        # ── Expense breakdown progress bars ──
+        if not expenses_df.empty and M['total_expenses'] > 0:
+            st.markdown("### Expense Share")
+            all_cats = []
+            # Feed always first
+            if M['feed_cost'] > 0:
+                all_cats.append(("Feed Costs",     M['feed_cost'],  '#10b981'))
+            if M['chick_cost'] > 0:
+                all_cats.append(("Chick Purchase", M['chick_cost'], '#3b82f6'))
+            for cat_name, cat_amt in op_category_rows:
+                if cat_amt > 0:
+                    all_cats.append((cat_name.strip(), cat_amt, '#f59e0b'))
 
-        # ── Expense detail table ──
-        if not expenses_df.empty:
-            st.markdown("### Expense Detail")
-            disp = expenses_df[['expensedate','category','description','amount']].copy()
-            disp = disp.sort_values('expensedate', ascending=False)
-            disp['amount'] = disp['amount'].apply(lambda x: f"TZS {int(x):,}")
-            st.dataframe(disp, use_container_width=True, hide_index=True)
+            for name, amt, col in all_cats:
+                pct = amt / M['total_expenses'] * 100
+                c1, c2, c3 = st.columns([2, 4, 1])
+                with c1:
+                    st.markdown(
+                        f"<p style='color:#e6edf3;font-size:13px;margin:6px 0;'>{name}</p>",
+                        unsafe_allow_html=True
+                    )
+                with c2:
+                    st.progress(int(pct))
+                with c3:
+                    st.markdown(
+                        f"<p style='color:#8b949e;font-size:12px;margin:6px 0;'>{pct:.0f}%</p>",
+                        unsafe_allow_html=True
+                    )
 
     except Exception as e:
         st.error(f"Statements error: {e}")
