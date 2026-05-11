@@ -1125,7 +1125,7 @@ elif st.session_state.current_tab == 'intelligence':
                     orientation='h',
                     marker_color=['#ef4444' if i == 0 else '#f59e0b' if i < 3 else '#10b981'
                                   for i in range(min(10, len(buyer_df)))],
-                    text=[f"TZS {r/1e6:.1f}M" for r in buyer_df['revenue'].head(10)],
+                    text=[f"TZS {float(r)/1e6:.1f}M" for r in buyer_df['revenue'].head(10)],
                     textposition='outside'
                 ))
                 fig.update_layout(**PLOT_LAYOUT, height=320,
@@ -1137,7 +1137,7 @@ elif st.session_state.current_tab == 'intelligence':
                 st.markdown("### Revenue Share")
                 top_buyers = buyer_df.head(6)
                 if len(buyer_df) > 6:
-                    others_rev = buyer_df.iloc[6:]['revenue'].sum()
+                    others_rev = float(buyer_df.iloc[6:]['revenue'].sum())
                     others_row = pd.DataFrame([{'buyername': 'Others', 'revenue': others_rev}])
                     top_buyers = pd.concat([top_buyers, others_row], ignore_index=True)
 
@@ -1151,8 +1151,8 @@ elif st.session_state.current_tab == 'intelligence':
                 st.plotly_chart(fig2, use_container_width=True)
 
             st.markdown("### Buyer Detail")
-            buyer_df['Revenue'] = buyer_df['revenue'].apply(lambda x: f"TZS {x:,}")
-            buyer_df['Avg Price/Bird'] = (buyer_df['revenue'] / buyer_df['birds']).apply(lambda x: f"TZS {x:,.0f}")
+            buyer_df['Revenue'] = buyer_df['revenue'].apply(lambda x: f"TZS {float(x):,.0f}")
+            buyer_df['Avg Price/Bird'] = (buyer_df['revenue'].astype(float) / buyer_df['birds'].astype(float)).apply(lambda x: f"TZS {x:,.0f}")
             buyer_df = buyer_df.rename(columns={'buyername':'Buyer','birds':'Birds','transactions':'Transactions'})
             st.dataframe(buyer_df[['Buyer','Birds','Revenue','Transactions','Avg Price/Bird']],
                          use_container_width=True, hide_index=True)
