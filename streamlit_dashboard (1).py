@@ -394,44 +394,39 @@ def safe_int(val):
     except: return 0
 
 def get_metrics():
-    empty = dict(total_sold=0, total_revenue=0, feed_cost=0,
-                 other_expenses=0, op_expenses=0, total_expenses=0, chick_cost=0,
-                 profit=0, gross_profit=0, gross_margin=0, margin=0,
-                 unique_buyers=0, concentration=0, avg_price=0, demand_score=50)
-    if sales_df.empty:
-        return empty
-
-    total_sold    = safe_int(sales_df['quantitysold'].sum())
-    total_revenue = safe_int(sales_df['totalrevenue'].sum())
-    feed_cost     = safe_int(feed_log_df['feedcost'].sum()) if not feed_log_df.empty else 0
-
-    # Split other expenses: chick purchases are COGS, rest are operating
-    chick_cost    = 0
-    op_expenses   = 0
+    # Always calculate costs — available from day 1 regardless of sales
+    feed_cost  = safe_int(feed_log_df['feedcost'].sum()) if not feed_log_df.empty else 0
+    chick_cost = 0
+    op_expenses = 0
     if not expenses_df.empty:
         chick_mask  = expenses_df['category'].str.lower().str.contains('chick', na=False)
-        chick_cost  = safe_int(expenses_df.loc[chick_mask, 'amount'].sum())
+        chick_cost  = safe_int(expenses_df.loc[chick_mask,  'amount'].sum())
         op_expenses = safe_int(expenses_df.loc[~chick_mask, 'amount'].sum())
+    other_expenses = safe_int(expenses_df['amount'].sum()) if not expenses_df.empty else 0
+    total_expenses = feed_cost + other_expenses
 
-    other_expenses  = safe_int(expenses_df['amount'].sum()) if not expenses_df.empty else 0
-    total_expenses  = feed_cost + other_expenses
+    # Sales metrics — zero if no sales yet (not an error)
+    total_sold    = safe_int(sales_df['quantitysold'].sum()) if not sales_df.empty else 0
+    total_revenue = safe_int(sales_df['totalrevenue'].sum()) if not sales_df.empty else 0
+    avg_price     = float(sales_df['unitprice'].mean())      if not sales_df.empty else 0
 
-    gross_profit  = total_revenue - feed_cost - chick_cost
-    gross_margin  = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0
-    profit        = total_revenue - total_expenses
-    margin        = (profit / total_revenue * 100) if total_revenue > 0 else 0
-    avg_price     = float(sales_df['unitprice'].mean()) if not sales_df.empty else 0
+    gross_profit = total_revenue - feed_cost - chick_cost
+    gross_margin = (gross_profit / total_revenue * 100) if total_revenue > 0 else 0
+    profit       = total_revenue - total_expenses
+    margin       = (profit / total_revenue * 100) if total_revenue > 0 else 0
 
-    unique_buyers = safe_int(sales_df['batchid'].nunique()) if 'buyername' in sales_df else 0
-    try:
-        buyer_q   = sales_df.groupby('buyername')['quantitysold'].sum().sort_values(ascending=False)
-        top3      = safe_int(buyer_q.head(3).sum())
-        concentration = (top3 / total_sold * 100) if total_sold > 0 else 0
-        unique_buyers = len(buyer_q)
-    except:
-        concentration = 0
-
-    demand_score = 85 if concentration < 40 else 75 if concentration < 60 else 60 if concentration < 75 else 45
+    unique_buyers = 0
+    concentration = 0
+    demand_score  = 50
+    if not sales_df.empty:
+        try:
+            buyer_q       = sales_df.groupby('buyername')['quantitysold'].sum().sort_values(ascending=False)
+            top3          = safe_int(buyer_q.head(3).sum())
+            unique_buyers = len(buyer_q)
+            concentration = (top3 / total_sold * 100) if total_sold > 0 else 0
+            demand_score  = 85 if concentration < 40 else 75 if concentration < 60 else 60 if concentration < 75 else 45
+        except:
+            pass
 
     return dict(
         total_sold=total_sold, total_revenue=total_revenue,
@@ -481,10 +476,10 @@ if st.session_state.current_tab == 'overview':
             with col:
                 st.markdown(mcard(*card), unsafe_allow_html=True)
 
-        if not sales_df.empty:
-            c1, c2 = st.columns([2, 1])
+        c1, c2 = st.columns([2, 1])
 
-            with c1:
+        with c1:
+            if not sales_df.empty:
                 st.markdown("### Sales Trend")
                 daily = sales_df.groupby('datesold').agg(
                     birds=('quantitysold','sum'),
@@ -501,38 +496,53 @@ if st.session_state.current_tab == 'overview':
                                   xaxis_title="", yaxis_title="Birds",
                                   margin=dict(l=10,r=10,t=10,b=10))
                 st.plotly_chart(fig, use_container_width=True)
+            elif not feed_log_df.empty:
+                st.markdown("### Feed Consumption (no sales yet)")
+                daily_f = feed_log_df.groupby('datefed')['quantitykg'].sum().reset_index()
+                fig = go.Figure(go.Bar(
+                    x=daily_f['datefed'], y=daily_f['quantitykg'],
+                    marker_color='#f59e0b', opacity=0.8
+                ))
+                fig.update_layout(**PLOT_LAYOUT, height=280,
+                                  xaxis_title="", yaxis_title="kg",
+                                  margin=dict(l=10,r=10,t=10,b=10))
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📌 No sales or feed data yet for this period")
 
-            with c2:
-                st.markdown("### Cost Breakdown")
-                if M['total_expenses'] > 0:
-                    labels = ['Feed', 'Chicks', 'Operating']
-                    values = [M['feed_cost'], M['chick_cost'], M['op_expenses']]
-                    colors = ['#10b981', '#3b82f6', '#f59e0b']
+        with c2:
+            st.markdown("### Cost Breakdown")
+            if M['total_expenses'] > 0:
+                labels = ['Feed', 'Chicks', 'Operating']
+                values = [M['feed_cost'], M['chick_cost'], M['op_expenses']]
+                colors = ['#10b981', '#3b82f6', '#f59e0b']
+                # Filter out zero values
+                filtered = [(l,v,c) for l,v,c in zip(labels,values,colors) if v > 0]
+                if filtered:
+                    fl, fv, fc = zip(*filtered)
                     fig2 = go.Figure(go.Pie(
-                        labels=labels, values=values,
-                        hole=0.55, marker_colors=colors,
+                        labels=fl, values=fv,
+                        hole=0.55, marker_colors=fc,
                         textinfo='percent', textfont_size=12
                     ))
                     fig2.update_layout(**PLOT_LAYOUT, height=280,
                                        margin=dict(l=10,r=10,t=10,b=10),
                                        showlegend=True)
                     st.plotly_chart(fig2, use_container_width=True)
-                else:
-                    st.info("No expense data yet")
+            else:
+                st.info("No expense data yet")
 
-            if not mortality_df.empty:
-                st.markdown("### Mortality Trend")
-                daily_m = mortality_df.groupby('daterecorded')['quantitydied'].sum().reset_index()
-                fig3 = go.Figure(go.Bar(
-                    x=daily_m['daterecorded'], y=daily_m['quantitydied'],
-                    marker_color='#ef4444', opacity=0.7
-                ))
-                fig3.update_layout(**PLOT_LAYOUT, height=180,
-                                   margin=dict(l=10,r=10,t=10,b=10),
-                                   xaxis_title="", yaxis_title="Deaths")
-                st.plotly_chart(fig3, use_container_width=True)
-        else:
-            st.info("No sales data for the selected filters")
+        if not mortality_df.empty:
+            st.markdown("### Mortality Trend")
+            daily_m = mortality_df.groupby('daterecorded')['quantitydied'].sum().reset_index()
+            fig3 = go.Figure(go.Bar(
+                x=daily_m['daterecorded'], y=daily_m['quantitydied'],
+                marker_color='#ef4444', opacity=0.7
+            ))
+            fig3.update_layout(**PLOT_LAYOUT, height=180,
+                               margin=dict(l=10,r=10,t=10,b=10),
+                               xaxis_title="", yaxis_title="Deaths")
+            st.plotly_chart(fig3, use_container_width=True)
     except Exception as e:
         st.error(f"Overview error: {e}")
 
@@ -579,7 +589,9 @@ elif st.session_state.current_tab == 'insights':
 
         with c1:
             st.markdown("### Buyer Concentration")
-            if not sales_df.empty:
+            if sales_df.empty:
+                st.info("📌 No sales yet — concentration data will appear after first sale")
+            elif not sales_df.empty:
                 buyer_vol = sales_df.groupby('buyername')['quantitysold'].sum().sort_values(ascending=False).head(8)
                 fig = go.Figure(go.Bar(
                     x=buyer_vol.values, y=buyer_vol.index,
@@ -650,7 +662,7 @@ elif st.session_state.current_tab == 'financial':
 
         with c1:
             st.markdown("### Revenue vs Cost Over Time")
-            if not sales_df.empty:
+            if not sales_df.empty or not feed_log_df.empty:
                 daily_rev = sales_df.groupby('datesold')['totalrevenue'].sum().reset_index()
                 daily_rev.columns = ['date', 'revenue']
 
@@ -827,31 +839,33 @@ elif st.session_state.current_tab == 'summary':
 
         st.divider()
 
-        # ── Per-batch breakdown table ──
-        if selected_ids and not sales_df.empty:
+        # ── Per-batch breakdown table — shows even without sales ──
+        if selected_ids:
             st.markdown("### Per-Batch Performance")
             rows = []
             for bid in selected_ids:
                 batch_info = all_batches[all_batches['batchid'] == bid].iloc[0]
-                s = sales_df[sales_df['batchid'] == bid]
-                f = feed_log_df[feed_log_df['batchid'] == bid] if not feed_log_df.empty else pd.DataFrame()
-                e = expenses_df[expenses_df['batchid'] == bid] if not expenses_df.empty else pd.DataFrame()
+                s = sales_df[sales_df['batchid'] == bid]         if not sales_df.empty    else pd.DataFrame()
+                f = feed_log_df[feed_log_df['batchid'] == bid]   if not feed_log_df.empty else pd.DataFrame()
+                e = expenses_df[expenses_df['batchid'] == bid]   if not expenses_df.empty else pd.DataFrame()
 
-                rev  = safe_int(s['totalrevenue'].sum())
-                sold = safe_int(s['quantitysold'].sum())
-                fc   = safe_int(f['feedcost'].sum()) if not f.empty else 0
-                oe   = safe_int(e['amount'].sum()) if not e.empty else 0
+                rev  = safe_int(s['totalrevenue'].sum()) if not s.empty else 0
+                sold = safe_int(s['quantitysold'].sum()) if not s.empty else 0
+                fc   = safe_int(f['feedcost'].sum())     if not f.empty else 0
+                oe   = safe_int(e['amount'].sum())        if not e.empty else 0
                 prof = rev - fc - oe
                 rows.append({
-                    'Batch':    batch_info['batchname'],
-                    'Birds':    sold,
-                    'Revenue':  f"TZS {rev:,}",
-                    'Feed':     f"TZS {fc:,}",
-                    'Other':    f"TZS {oe:,}",
-                    'Profit':   f"TZS {prof:,}",
-                    'Margin':   f"{(prof/rev*100):.1f}%" if rev > 0 else "—",
+                    'Batch':   batch_info['batchname'],
+                    'Birds Sold': sold if sold > 0 else '—',
+                    'Revenue': f"TZS {rev:,}" if rev > 0 else '—',
+                    'Feed':    f"TZS {fc:,}",
+                    'Other':   f"TZS {oe:,}",
+                    'Net':     f"TZS {prof:,}",
+                    'Margin':  f"{(prof/rev*100):.1f}%" if rev > 0 else '— (no sales yet)',
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        elif sales_df.empty and expenses_df.empty and feed_log_df.empty:
+            st.info("No data yet for the selected filters")
 
     except Exception as e:
         st.error(f"Summary error: {e}")
@@ -1108,7 +1122,9 @@ elif st.session_state.current_tab == 'intelligence':
             sc = "#10b981" if M['demand_score'] >= 80 else "#f59e0b" if M['demand_score'] >= 60 else "#ef4444"
             st.markdown(mcard("Demand Score", M['demand_score'], "/100", sc), unsafe_allow_html=True)
 
-        if not sales_df.empty:
+        if sales_df.empty:
+            st.info("📌 No sales recorded yet — buyer intelligence will appear after first sale")
+        else:
             c1, c2 = st.columns(2)
 
             with c1:
@@ -1156,8 +1172,6 @@ elif st.session_state.current_tab == 'intelligence':
             buyer_df = buyer_df.rename(columns={'buyername':'Buyer','birds':'Birds','transactions':'Transactions'})
             st.dataframe(buyer_df[['Buyer','Birds','Revenue','Transactions','Avg Price/Bird']],
                          use_container_width=True, hide_index=True)
-        else:
-            st.info("No sales data for the selected filters")
 
     except Exception as e:
         st.error(f"Intelligence error: {e}")
