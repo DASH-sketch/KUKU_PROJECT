@@ -90,6 +90,21 @@ st.markdown("""
     .status-yellow { color: #F59E0B; }
     .status-red { color: #EF4444; }
 
+    .recent-entries {
+        background: #0f172a;
+        border: 1px solid #334155;
+        border-radius: 10px;
+        padding: 16px;
+        margin-top: 24px;
+    }
+    .recent-title {
+        color: #94A3B8;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 10px;
+        font-weight: 600;
+    }
     .success-box {
         background: #064E3B;
         border: 1px solid #10B981;
@@ -139,6 +154,20 @@ st.markdown("""
 
 def fresh_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
+
+def fetch_recent(query, params=None):
+    """Fetch recent records - no cache so newly saved entries show immediately."""
+    try:
+        c = fresh_conn()
+        cur = c.cursor()
+        cur.execute(query, params or [])
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        c.close()
+        import pandas as pd
+        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+    except:
+        return None
 
 def get_active_batches():
     try:
@@ -453,6 +482,18 @@ with tabs[0]:
                     st.error(f"❌ Error saving: {str(e)}")
 
 # ============================================================================
+
+    # ── Recent entries ──
+    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Weight Sessions</div>', unsafe_allow_html=True)
+    _q = "SELECT ws.sessiondate, b.batchname, ws.dayofcycle, ws.averageweightperbird, ws.samplesize, ws.recordedby FROM public.weight_sessions ws JOIN public.batches_detailed b ON ws.batchid = b.batchid ORDER BY ws.sessiondate DESC, ws.sessionid DESC LIMIT 5"
+    _df = fetch_recent(_q)
+    if _df is not None and not _df.empty:
+        _df.columns = ['Date','Batch','Day of Cycle','Avg Weight (g)','Sample','Recorded By']
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No weight sessions recorded yet")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # TAB 2: DAILY SALES (unchanged from v2)
 # ============================================================================
 
@@ -563,6 +604,20 @@ with tabs[1]:
                     st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
+
+    # ── Recent entries ──
+    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Sales</div>', unsafe_allow_html=True)
+    _q = "SELECT ds.datesold, b.batchname, bu.buyername, ds.quantitysold, ds.unitprice, ds.totalrevenue, ds.salestatus FROM public.daily_sales ds JOIN public.batches_detailed b ON ds.batchid = b.batchid JOIN public.buyers bu ON ds.buyerid = bu.buyerid ORDER BY ds.datesold DESC, ds.saleid DESC LIMIT 5"
+    _df = fetch_recent(_q)
+    if _df is not None and not _df.empty:
+        _df.columns = ['Date','Batch','Buyer','Birds','Unit Price','Total','Status']
+        _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}")
+        _df['Total']      = _df['Total'].apply(lambda x: f"TZS {int(x):,}")
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No sales recorded yet")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # TAB 3: FEED LOG
 # CHANGES FROM v2:
 #   - Auto-fetches unit cost from this batch's feed purchase in expenses table
@@ -662,6 +717,19 @@ with tabs[2]:
                         st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
+
+    # ── Recent entries ──
+    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Feed Log Entries</div>', unsafe_allow_html=True)
+    _q = "SELECT fl.datefed, b.batchname, f.feedtype, fl.quantitykg, fl.feedcost FROM public.daily_feed_log fl JOIN public.batches_detailed b ON fl.batchid = b.batchid JOIN public.feeds f ON fl.feedtypeid = f.feedid ORDER BY fl.datefed DESC, fl.feedlogid DESC LIMIT 5"
+    _df = fetch_recent(_q)
+    if _df is not None and not _df.empty:
+        _df.columns = ['Date','Batch','Feed Type','Qty (kg)','Cost']
+        _df['Cost'] = _df['Cost'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No feed log entries yet")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # TAB 4: MORTALITY (unchanged from v2)
 # ============================================================================
 
@@ -720,6 +788,18 @@ with tabs[3]:
                     st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
+
+    # ── Recent entries ──
+    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Mortality Records</div>', unsafe_allow_html=True)
+    _q = "SELECT dm.daterecorded, b.batchname, dm.quantitydied, dm.reason, dm.notes FROM public.daily_mortality dm JOIN public.batches_detailed b ON dm.batchid = b.batchid ORDER BY dm.daterecorded DESC, dm.mortalityid DESC LIMIT 5"
+    _df = fetch_recent(_q)
+    if _df is not None and not _df.empty:
+        _df.columns = ['Date','Batch','Deaths','Reason','Notes']
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No mortality records yet")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # TAB 5: EXPENSES
 # CHANGES FROM v2:
 #   - Added optional Quantity + Unit + Unit Price fields (work for ALL categories)
@@ -884,6 +964,21 @@ with tabs[4]:
                     st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
+
+    # ── Recent entries ──
+    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Expenses</div>', unsafe_allow_html=True)
+    _q = "SELECT e.expensedate, e.category, e.description, e.quantity, e.unit_price, e.amount, b.batchname FROM public.expenses e LEFT JOIN public.batches_detailed b ON e.batchid = b.batchid ORDER BY e.expensedate DESC, e.expense_id DESC LIMIT 5"
+    _df = fetch_recent(_q)
+    if _df is not None and not _df.empty:
+        _df.columns = ['Date','Category','Description','Qty','Unit Price','Amount','Batch']
+        _df['Amount']     = _df['Amount'].apply(lambda x: f"TZS {int(x):,}")
+        _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
+        _df['Qty']        = _df['Qty'].apply(lambda x: int(x) if x else '-')
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No expenses yet")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # TAB 6: CRITICAL EVENT (unchanged from v2)
 # ============================================================================
 
@@ -952,6 +1047,18 @@ with tabs[5]:
                     st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
+
+    # ── Recent entries ──
+    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Critical Events</div>', unsafe_allow_html=True)
+    _q = "SELECT ce.eventdate, b.batchname, ce.eventtype, ce.severity, LEFT(ce.description, 60) FROM public.critical_events ce LEFT JOIN public.batches_detailed b ON ce.batchid = b.batchid ORDER BY ce.eventdate DESC, ce.eventid DESC LIMIT 5"
+    _df = fetch_recent(_q)
+    if _df is not None and not _df.empty:
+        _df.columns = ['Date','Batch','Type','Severity','Description']
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No critical events yet")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # TAB 7: DAILY CHECKLIST (unchanged from v2)
 # ============================================================================
 
@@ -1038,6 +1145,21 @@ with tabs[6]:
                     st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
+
+    # ── Recent entries ──
+    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Checklists</div>', unsafe_allow_html=True)
+    _q = "SELECT cl.CheckDate, b.batchname, cl.Shift, cl.FeedRefilled, cl.WaterChecked, cl.LightsChecked, cl.TemperatureReading, cl.RecordedBy FROM public.daily_checklist cl JOIN public.batches_detailed b ON cl.BatchID = b.batchid ORDER BY cl.CheckDate DESC, cl.ChecklistID DESC LIMIT 5"
+    _df = fetch_recent(_q)
+    if _df is not None and not _df.empty:
+        _df.columns = ['Date','Batch','Shift','Fed','Water','Lights','Temp °C','By']
+        _df['Fed']    = _df['Fed'].apply(lambda x: "Yes" if x else "No")
+        _df['Water']  = _df['Water'].apply(lambda x: "Yes" if x else "No")
+        _df['Lights'] = _df['Lights'].apply(lambda x: "Yes" if x else "No")
+        st.dataframe(_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No checklists yet")
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # FOOTER
 # ============================================================================
 
