@@ -155,12 +155,17 @@ st.markdown("""
 def fresh_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
-def fetch_recent(query, params=None):
-    """Fetch recent records - no cache so newly saved entries show immediately."""
+@st.cache_data(ttl=30)
+def fetch_recent(query):
+    """
+    Fetch recent records with 30-second cache.
+    Without caching, all 7 tab queries fired on every keystroke causing page unresponsive errors.
+    30s TTL means new entries appear within 30 seconds of saving - acceptable for recent history.
+    """
     try:
         c = fresh_conn()
         cur = c.cursor()
-        cur.execute(query, params or [])
+        cur.execute(query)
         cols = [d[0] for d in cur.description]
         rows = cur.fetchall()
         c.close()
@@ -484,15 +489,14 @@ with tabs[0]:
 # ============================================================================
 
     # ── Recent entries ──
-    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Weight Sessions</div>', unsafe_allow_html=True)
-    _q = "SELECT ws.sessiondate, b.batchname, ws.dayofcycle, ws.averageweightperbird, ws.samplesize, ws.recordedby FROM public.weight_sessions ws JOIN public.batches_detailed b ON ws.batchid = b.batchid ORDER BY ws.sessiondate DESC, ws.sessionid DESC LIMIT 5"
-    _df = fetch_recent(_q)
-    if _df is not None and not _df.empty:
-        _df.columns = ['Date','Batch','Day of Cycle','Avg Weight (g)','Sample','Recorded By']
-        st.dataframe(_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No weight sessions recorded yet")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("📋 Last 5 Weight Sessions", expanded=False):
+        _q = "SELECT ws.sessiondate, b.batchname, ws.dayofcycle, ws.averageweightperbird, ws.samplesize, ws.recordedby FROM public.weight_sessions ws JOIN public.batches_detailed b ON ws.batchid = b.batchid ORDER BY ws.sessiondate DESC, ws.sessionid DESC LIMIT 5"
+        _df = fetch_recent(_q)
+        if _df is not None and not _df.empty:
+            _df.columns = ['Date','Batch','Day of Cycle','Avg Weight (g)','Sample','Recorded By']
+            st.table(_df)
+        else:
+            st.caption("No weight sessions recorded yet")
 
 # TAB 2: DAILY SALES (unchanged from v2)
 # ============================================================================
@@ -606,17 +610,16 @@ with tabs[1]:
 # ============================================================================
 
     # ── Recent entries ──
-    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Sales</div>', unsafe_allow_html=True)
-    _q = "SELECT ds.datesold, b.batchname, bu.buyername, ds.quantitysold, ds.unitprice, ds.totalrevenue, ds.salestatus FROM public.daily_sales ds JOIN public.batches_detailed b ON ds.batchid = b.batchid JOIN public.buyers bu ON ds.buyerid = bu.buyerid ORDER BY ds.datesold DESC, ds.saleid DESC LIMIT 5"
-    _df = fetch_recent(_q)
-    if _df is not None and not _df.empty:
-        _df.columns = ['Date','Batch','Buyer','Birds','Unit Price','Total','Status']
-        _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}")
-        _df['Total']      = _df['Total'].apply(lambda x: f"TZS {int(x):,}")
-        st.dataframe(_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No sales recorded yet")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("📋 Last 5 Sales", expanded=False):
+        _q = "SELECT ds.datesold, b.batchname, bu.buyername, ds.quantitysold, ds.unitprice, ds.totalrevenue, ds.salestatus FROM public.daily_sales ds JOIN public.batches_detailed b ON ds.batchid = b.batchid JOIN public.buyers bu ON ds.buyerid = bu.buyerid ORDER BY ds.datesold DESC, ds.saleid DESC LIMIT 5"
+        _df = fetch_recent(_q)
+        if _df is not None and not _df.empty:
+            _df.columns = ['Date','Batch','Buyer','Birds','Unit Price','Total','Status']
+            _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}")
+            _df['Total']      = _df['Total'].apply(lambda x: f"TZS {int(x):,}")
+            st.table(_df)
+        else:
+            st.caption("No sales recorded yet")
 
 # TAB 3: FEED LOG
 # CHANGES FROM v2:
@@ -719,16 +722,15 @@ with tabs[2]:
 # ============================================================================
 
     # ── Recent entries ──
-    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Feed Log Entries</div>', unsafe_allow_html=True)
-    _q = "SELECT fl.datefed, b.batchname, f.feedtype, fl.quantitykg, fl.feedcost FROM public.daily_feed_log fl JOIN public.batches_detailed b ON fl.batchid = b.batchid JOIN public.feeds f ON fl.feedtypeid = f.feedid ORDER BY fl.datefed DESC, fl.feedlogid DESC LIMIT 5"
-    _df = fetch_recent(_q)
-    if _df is not None and not _df.empty:
-        _df.columns = ['Date','Batch','Feed Type','Qty (kg)','Cost']
-        _df['Cost'] = _df['Cost'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
-        st.dataframe(_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No feed log entries yet")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("📋 Last 5 Feed Log Entries", expanded=False):
+        _q = "SELECT fl.datefed, b.batchname, f.feedtype, fl.quantitykg, fl.feedcost FROM public.daily_feed_log fl JOIN public.batches_detailed b ON fl.batchid = b.batchid JOIN public.feeds f ON fl.feedtypeid = f.feedid ORDER BY fl.datefed DESC, fl.feedlogid DESC LIMIT 5"
+        _df = fetch_recent(_q)
+        if _df is not None and not _df.empty:
+            _df.columns = ['Date','Batch','Feed Type','Qty (kg)','Cost']
+            _df['Cost'] = _df['Cost'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
+            st.table(_df)
+        else:
+            st.caption("No feed log entries yet")
 
 # TAB 4: MORTALITY (unchanged from v2)
 # ============================================================================
@@ -790,15 +792,14 @@ with tabs[3]:
 # ============================================================================
 
     # ── Recent entries ──
-    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Mortality Records</div>', unsafe_allow_html=True)
-    _q = "SELECT dm.daterecorded, b.batchname, dm.quantitydied, dm.reason, dm.notes FROM public.daily_mortality dm JOIN public.batches_detailed b ON dm.batchid = b.batchid ORDER BY dm.daterecorded DESC, dm.mortalityid DESC LIMIT 5"
-    _df = fetch_recent(_q)
-    if _df is not None and not _df.empty:
-        _df.columns = ['Date','Batch','Deaths','Reason','Notes']
-        st.dataframe(_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No mortality records yet")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("📋 Last 5 Mortality Records", expanded=False):
+        _q = "SELECT dm.daterecorded, b.batchname, dm.quantitydied, dm.reason, dm.notes FROM public.daily_mortality dm JOIN public.batches_detailed b ON dm.batchid = b.batchid ORDER BY dm.daterecorded DESC, dm.mortalityid DESC LIMIT 5"
+        _df = fetch_recent(_q)
+        if _df is not None and not _df.empty:
+            _df.columns = ['Date','Batch','Deaths','Reason','Notes']
+            st.table(_df)
+        else:
+            st.caption("No mortality records yet")
 
 # TAB 5: EXPENSES
 # CHANGES FROM v2:
@@ -966,18 +967,17 @@ with tabs[4]:
 # ============================================================================
 
     # ── Recent entries ──
-    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Expenses</div>', unsafe_allow_html=True)
-    _q = "SELECT e.expensedate, e.category, e.description, e.quantity, e.unit_price, e.amount, b.batchname FROM public.expenses e LEFT JOIN public.batches_detailed b ON e.batchid = b.batchid ORDER BY e.expensedate DESC, e.expense_id DESC LIMIT 5"
-    _df = fetch_recent(_q)
-    if _df is not None and not _df.empty:
-        _df.columns = ['Date','Category','Description','Qty','Unit Price','Amount','Batch']
-        _df['Amount']     = _df['Amount'].apply(lambda x: f"TZS {int(x):,}")
-        _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
-        _df['Qty']        = _df['Qty'].apply(lambda x: int(x) if x else '-')
-        st.dataframe(_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No expenses yet")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("📋 Last 5 Expenses", expanded=False):
+        _q = "SELECT e.expensedate, e.category, e.description, e.quantity, e.unit_price, e.amount, b.batchname FROM public.expenses e LEFT JOIN public.batches_detailed b ON e.batchid = b.batchid ORDER BY e.expensedate DESC, e.expense_id DESC LIMIT 5"
+        _df = fetch_recent(_q)
+        if _df is not None and not _df.empty:
+            _df.columns = ['Date','Category','Description','Qty','Unit Price','Amount','Batch']
+            _df['Amount']     = _df['Amount'].apply(lambda x: f"TZS {int(x):,}")
+            _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
+            _df['Qty']        = _df['Qty'].apply(lambda x: int(x) if x else '-')
+            st.table(_df)
+        else:
+            st.caption("No expenses yet")
 
 # TAB 6: CRITICAL EVENT (unchanged from v2)
 # ============================================================================
@@ -1049,15 +1049,14 @@ with tabs[5]:
 # ============================================================================
 
     # ── Recent entries ──
-    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Critical Events</div>', unsafe_allow_html=True)
-    _q = "SELECT ce.eventdate, b.batchname, ce.eventtype, ce.severity, LEFT(ce.description, 60) FROM public.critical_events ce LEFT JOIN public.batches_detailed b ON ce.batchid = b.batchid ORDER BY ce.eventdate DESC, ce.eventid DESC LIMIT 5"
-    _df = fetch_recent(_q)
-    if _df is not None and not _df.empty:
-        _df.columns = ['Date','Batch','Type','Severity','Description']
-        st.dataframe(_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No critical events yet")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("📋 Last 5 Critical Events", expanded=False):
+        _q = "SELECT ce.eventdate, b.batchname, ce.eventtype, ce.severity, LEFT(ce.description, 60) FROM public.critical_events ce LEFT JOIN public.batches_detailed b ON ce.batchid = b.batchid ORDER BY ce.eventdate DESC, ce.eventid DESC LIMIT 5"
+        _df = fetch_recent(_q)
+        if _df is not None and not _df.empty:
+            _df.columns = ['Date','Batch','Type','Severity','Description']
+            st.table(_df)
+        else:
+            st.caption("No critical events yet")
 
 # TAB 7: DAILY CHECKLIST (unchanged from v2)
 # ============================================================================
@@ -1147,18 +1146,17 @@ with tabs[6]:
 # ============================================================================
 
     # ── Recent entries ──
-    st.markdown('<div class="recent-entries"><div class="recent-title">📋 Last 5 Checklists</div>', unsafe_allow_html=True)
-    _q = "SELECT cl.CheckDate, b.batchname, cl.Shift, cl.FeedRefilled, cl.WaterChecked, cl.LightsChecked, cl.TemperatureReading, cl.RecordedBy FROM public.daily_checklist cl JOIN public.batches_detailed b ON cl.BatchID = b.batchid ORDER BY cl.CheckDate DESC, cl.ChecklistID DESC LIMIT 5"
-    _df = fetch_recent(_q)
-    if _df is not None and not _df.empty:
-        _df.columns = ['Date','Batch','Shift','Fed','Water','Lights','Temp °C','By']
-        _df['Fed']    = _df['Fed'].apply(lambda x: "Yes" if x else "No")
-        _df['Water']  = _df['Water'].apply(lambda x: "Yes" if x else "No")
-        _df['Lights'] = _df['Lights'].apply(lambda x: "Yes" if x else "No")
-        st.dataframe(_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No checklists yet")
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.expander("📋 Last 5 Checklists", expanded=False):
+        _q = "SELECT cl.CheckDate, b.batchname, cl.Shift, cl.FeedRefilled, cl.WaterChecked, cl.LightsChecked, cl.TemperatureReading, cl.RecordedBy FROM public.daily_checklist cl JOIN public.batches_detailed b ON cl.BatchID = b.batchid ORDER BY cl.CheckDate DESC, cl.ChecklistID DESC LIMIT 5"
+        _df = fetch_recent(_q)
+        if _df is not None and not _df.empty:
+            _df.columns = ['Date','Batch','Shift','Fed','Water','Lights','Temp °C','By']
+            _df['Fed']    = _df['Fed'].apply(lambda x: "Yes" if x else "No")
+            _df['Water']  = _df['Water'].apply(lambda x: "Yes" if x else "No")
+            _df['Lights'] = _df['Lights'].apply(lambda x: "Yes" if x else "No")
+            st.table(_df)
+        else:
+            st.caption("No checklists yet")
 
 # FOOTER
 # ============================================================================
