@@ -19,6 +19,18 @@ st.set_page_config(
     layout="wide"
 )
 
+# Edit mode session state keys
+for _k in ['edit_sale_id','edit_sale_date','edit_sale_batch','edit_sale_buyer',
+           'edit_sale_qty','edit_sale_price','edit_sale_status','edit_sale_notes',
+           'edit_feed_id','edit_feed_date','edit_feed_batch','edit_feed_type',
+           'edit_feed_qty','edit_feed_notes',
+           'edit_mort_id','edit_mort_date','edit_mort_batch','edit_mort_qty',
+           'edit_mort_reason','edit_mort_notes',
+           'edit_exp_id','edit_exp_date','edit_exp_batch','edit_exp_cat',
+           'edit_exp_desc','edit_exp_qty','edit_exp_uprice','edit_exp_notes']:
+    if _k not in st.session_state:
+        st.session_state[_k] = None
+
 # ============================================================================
 # STYLING
 # ============================================================================
@@ -541,26 +553,51 @@ with tabs[1]:
             key="s_new_buyer"
         )
 
+    # Edit mode banner
+    _s_edit_id = st.session_state.get('edit_sale_id')
+    if _s_edit_id:
+        st.markdown(f"""
+        <div style="background:#1c1a07;border:1px solid #f59e0b;border-radius:8px;
+                    padding:10px 14px;margin-bottom:8px;">
+        ✏️ <strong style="color:#f59e0b;">EDITING RECORD #{_s_edit_id}</strong>
+        &nbsp;—&nbsp; <span style="color:#94A3B8;">Make changes below then click Update</span>
+        </div>""", unsafe_allow_html=True)
+        if st.button("✕ Cancel edit — return to new entry", key="cancel_sale_edit"):
+            for _k in ['edit_sale_id','edit_sale_date','edit_sale_batch','edit_sale_buyer',
+                       'edit_sale_qty','edit_sale_price','edit_sale_status','edit_sale_notes']:
+                st.session_state[_k] = None
+            st.rerun()
+
     with st.form("sales_form"):
         col1, col2 = st.columns(2)
 
+        _s_batch_default = st.session_state.get('edit_sale_batch') or list(batch_options.keys())[0]
+        _s_batch_idx     = list(batch_options.keys()).index(_s_batch_default) if _s_batch_default in batch_options else 0
+
         with col1:
-            s_batch = st.selectbox("Batch", list(batch_options.keys()))
-            s_date  = st.date_input("Sale Date", value=date.today())
+            s_batch = st.selectbox("Batch", list(batch_options.keys()), index=_s_batch_idx)
+            s_date  = st.date_input("Sale Date",
+                value=st.session_state.get('edit_sale_date') or date.today())
 
         with col2:
-            s_qty   = st.number_input("Birds Sold (Quantity)", min_value=1, value=50)
-            s_price = st.number_input("Price per Bird (TZS)", min_value=0, value=4000)
+            s_qty   = st.number_input("Birds Sold (Quantity)", min_value=1,
+                value=st.session_state.get('edit_sale_qty') or 50)
+            s_price = st.number_input("Price per Bird (TZS)", min_value=0,
+                value=st.session_state.get('edit_sale_price') or 4000)
             s_total = s_qty * s_price
             st.metric("Total Revenue", f"TZS {s_total:,}")
 
-        s_status = st.selectbox("Payment Status",
-            ["Paid", "Credit - Pending", "Partial Payment"])
-        s_notes = st.text_area("Notes", placeholder="Any details about this sale...")
+        _statuses = ["Paid", "Credit - Pending", "Partial Payment"]
+        _s_status_default = st.session_state.get('edit_sale_status') or "Paid"
+        _s_status_idx = _statuses.index(_s_status_default) if _s_status_default in _statuses else 0
+        s_status = st.selectbox("Payment Status", _statuses, index=_s_status_idx)
+        s_notes = st.text_area("Notes",
+            value=st.session_state.get('edit_sale_notes') or "",
+            placeholder="Any details about this sale...")
         s_by    = st.text_input("Recorded By", placeholder="Your name")
 
-        if st.form_submit_button("💾 SAVE SALE", use_container_width=True):
-            # Resolve final buyer name
+        _s_btn_label = f"✏️ UPDATE SALE #{_s_edit_id}" if _s_edit_id else "💾 SAVE SALE"
+        if st.form_submit_button(_s_btn_label, use_container_width=True):
             resolved_buyer = s_new_buyer_name.strip() if s_buyer_choice == NEW_BUYER else s_buyer_choice
 
             if not resolved_buyer:
@@ -572,11 +609,9 @@ with tabs[1]:
                     c   = fresh_conn()
                     cur = c.cursor()
 
-                    # Use known buyer_id if existing buyer selected (via label)
                     if s_buyer_choice != NEW_BUYER and s_buyer_choice in buyer_map:
                         buyer_id = buyer_map[s_buyer_choice]
                     else:
-                        # New buyer — check if name already exists, else create
                         cur.execute("SELECT buyerid FROM public.buyers WHERE buyername = %s", (resolved_buyer,))
                         result = cur.fetchone()
                         if result:
@@ -588,21 +623,33 @@ with tabs[1]:
                             )
                             buyer_id = cur.fetchone()[0]
 
-                    cur.execute("""
-                        INSERT INTO public.daily_sales
-                        (batchid, datesold, quantitysold, buyerid, unitprice, totalrevenue, salestatus, notes)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (batch_options[s_batch], s_date, s_qty,
-                          buyer_id, s_price, s_total, s_status, s_notes))
+                    if _s_edit_id:
+                        # UPDATE — recalculates totalrevenue
+                        cur.execute("""
+                            UPDATE public.daily_sales
+                            SET datesold=%s, batchid=%s, quantitysold=%s, buyerid=%s,
+                                unitprice=%s, totalrevenue=%s, salestatus=%s, notes=%s
+                            WHERE saleid=%s
+                        """, (s_date, batch_options[s_batch], s_qty, buyer_id,
+                              s_price, s_total, s_status, s_notes, _s_edit_id))
+                        msg = f"✅ Sale #{_s_edit_id} updated!<br>{s_qty} birds → {resolved_buyer} @ TZS {s_price:,} = TZS {s_total:,}"
+                        for _k in ['edit_sale_id','edit_sale_date','edit_sale_batch','edit_sale_buyer',
+                                   'edit_sale_qty','edit_sale_price','edit_sale_status','edit_sale_notes']:
+                            st.session_state[_k] = None
+                    else:
+                        # INSERT new record
+                        cur.execute("""
+                            INSERT INTO public.daily_sales
+                            (batchid, datesold, quantitysold, buyerid, unitprice, totalrevenue, salestatus, notes)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (batch_options[s_batch], s_date, s_qty,
+                              buyer_id, s_price, s_total, s_status, s_notes))
+                        msg = f"✅ Sale recorded!<br>{s_qty} birds → {resolved_buyer} @ TZS {s_price:,} = TZS {s_total:,}"
+
                     c.commit()
                     c.close()
-
-                    st.markdown(f"""
-                    <div class="success-box">
-                        ✅ Sale recorded!<br>
-                        {s_qty} birds → {resolved_buyer} @ TZS {s_price:,} = TZS {s_total:,}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f'<div class="success-box">{msg}</div>', unsafe_allow_html=True)
+                    fetch_recent.clear()
 
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
@@ -610,14 +657,37 @@ with tabs[1]:
 # ============================================================================
 
     # ── Recent entries ──
-    with st.expander("📋 Last 5 Sales", expanded=False):
-        _q = "SELECT ds.datesold, b.batchname, bu.buyername, ds.quantitysold, ds.unitprice, ds.totalrevenue, ds.salestatus FROM public.daily_sales ds JOIN public.batches_detailed b ON ds.batchid = b.batchid JOIN public.buyers bu ON ds.buyerid = bu.buyerid ORDER BY ds.datesold DESC, ds.saleid DESC LIMIT 5"
+    with st.expander("📋 Last 5 Sales  — click a record to load it for editing", expanded=False):
+        _q = """SELECT ds.saleid, ds.datesold, b.batchname, b.batchid,
+                       bu.buyername, bu.buyerid, ds.quantitysold, ds.unitprice,
+                       ds.totalrevenue, ds.salestatus, ds.notes
+                FROM public.daily_sales ds
+                JOIN public.batches_detailed b ON ds.batchid = b.batchid
+                JOIN public.buyers bu ON ds.buyerid = bu.buyerid
+                ORDER BY ds.datesold DESC, ds.saleid DESC LIMIT 5"""
         _df = fetch_recent(_q)
         if _df is not None and not _df.empty:
-            _df.columns = ['Date','Batch','Buyer','Birds','Unit Price','Total','Status']
-            _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}")
-            _df['Total']      = _df['Total'].apply(lambda x: f"TZS {int(x):,}")
-            st.table(_df)
+            for _, row in _df.iterrows():
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.markdown(
+                        f"**{row['datesold']}** | {row['batchname']} | "
+                        f"{row['buyername']} | {row['quantitysold']} birds | "
+                        f"TZS {int(row['unitprice']):,}/bird | {row['salestatus']}",
+                        unsafe_allow_html=False
+                    )
+                with c2:
+                    if st.button("📂 Load", key=f"load_sale_{row['saleid']}"):
+                        st.session_state.edit_sale_id     = int(row['saleid'])
+                        st.session_state.edit_sale_date   = row['datesold']
+                        st.session_state.edit_sale_batch  = row['batchname']
+                        st.session_state.edit_sale_buyer  = row['buyername']
+                        st.session_state.edit_sale_qty    = int(row['quantitysold'])
+                        st.session_state.edit_sale_price  = int(row['unitprice'])
+                        st.session_state.edit_sale_status = row['salestatus']
+                        st.session_state.edit_sale_notes  = row['notes'] or ""
+                        st.rerun()
+                st.divider()
         else:
             st.caption("No sales recorded yet")
 
@@ -671,17 +741,34 @@ with tabs[2]:
         </div>
         """, unsafe_allow_html=True)
 
+        _f_edit_id = st.session_state.get('edit_feed_id')
+        if _f_edit_id:
+            st.markdown(f"""
+            <div style="background:#1c1a07;border:1px solid #f59e0b;border-radius:8px;
+                        padding:10px 14px;margin-bottom:8px;">
+            ✏️ <strong style="color:#f59e0b;">EDITING FEED LOG #{_f_edit_id}</strong>
+            </div>""", unsafe_allow_html=True)
+            if st.button("✕ Cancel edit", key="cancel_feed_edit"):
+                for _k in ['edit_feed_id','edit_feed_date','edit_feed_batch',
+                           'edit_feed_type','edit_feed_qty','edit_feed_notes']:
+                    st.session_state[_k] = None
+                st.rerun()
+
         with st.form("feed_form"):
             col1, col2 = st.columns(2)
 
             with col1:
-                f_date  = st.date_input("Date", value=date.today())
+                f_date = st.date_input("Date",
+                    value=st.session_state.get('edit_feed_date') or date.today())
 
             with col2:
-                f_qty   = st.number_input("Quantity (kg)", min_value=0.1, value=25.0, step=0.5)
-                f_by    = st.text_input("Recorded By", placeholder="Your name")
+                f_qty  = st.number_input("Quantity (kg)", min_value=0.1,
+                    value=st.session_state.get('edit_feed_qty') or 25.0, step=0.5)
+                f_by   = st.text_input("Recorded By", placeholder="Your name")
 
-            f_notes = st.text_area("Notes", placeholder="Any issues with feed quality, delivery, etc...")
+            f_notes = st.text_area("Notes",
+                value=st.session_state.get('edit_feed_notes') or "",
+                placeholder="Any issues with feed quality, delivery, etc...")
 
             f_calculated_cost = f_qty * unit_cost
             st.markdown(f"""
@@ -693,42 +780,69 @@ with tabs[2]:
             </div>
             """, unsafe_allow_html=True)
 
-            if st.form_submit_button("💾 SAVE FEED LOG", use_container_width=True):
+            _f_btn = f"✏️ UPDATE FEED LOG #{_f_edit_id}" if _f_edit_id else "💾 SAVE FEED LOG"
+            if st.form_submit_button(_f_btn, use_container_width=True):
                 if not f_by:
                     st.error("❌ Please enter your name!")
                 else:
                     try:
                         c   = fresh_conn()
                         cur = c.cursor()
-                        cur.execute("""
-                            INSERT INTO public.daily_feed_log
-                            (batchid, datefed, feedtypeid, quantitykg, feedcost, notes)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (fl_batch_id, f_date, f_feedid,
-                              f_qty, int(f_calculated_cost), f_notes))
+                        if _f_edit_id:
+                            cur.execute("""
+                                UPDATE public.daily_feed_log
+                                SET datefed=%s, feedtypeid=%s, quantitykg=%s, feedcost=%s, notes=%s
+                                WHERE feedlogid=%s
+                            """, (f_date, f_feedid, f_qty, int(f_calculated_cost), f_notes, _f_edit_id))
+                            msg = f"✅ Feed log #{_f_edit_id} updated!<br>{f_qty}kg {f_type} → TZS {f_calculated_cost:,.0f}"
+                            for _k in ['edit_feed_id','edit_feed_date','edit_feed_batch',
+                                       'edit_feed_type','edit_feed_qty','edit_feed_notes']:
+                                st.session_state[_k] = None
+                        else:
+                            cur.execute("""
+                                INSERT INTO public.daily_feed_log
+                                (batchid, datefed, feedtypeid, quantitykg, feedcost, notes)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                            """, (fl_batch_id, f_date, f_feedid, f_qty, int(f_calculated_cost), f_notes))
+                            msg = f"✅ Feed log saved!<br>{f_qty}kg {f_type} → TZS {f_calculated_cost:,.0f}"
                         c.commit()
                         c.close()
-
-                        st.markdown(f"""
-                        <div class="success-box">
-                            ✅ Feed log saved!<br>
-                            {f_qty}kg {f_type} → TZS {f_calculated_cost:,.0f}
-                        </div>
-                        """, unsafe_allow_html=True)
-
+                        st.markdown(f'<div class="success-box">{msg}</div>', unsafe_allow_html=True)
+                        fetch_recent.clear()
                     except Exception as e:
                         st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
 
     # ── Recent entries ──
-    with st.expander("📋 Last 5 Feed Log Entries", expanded=False):
-        _q = "SELECT fl.datefed, b.batchname, f.feedtype, fl.quantitykg, fl.feedcost FROM public.daily_feed_log fl JOIN public.batches_detailed b ON fl.batchid = b.batchid JOIN public.feeds f ON fl.feedtypeid = f.feedid ORDER BY fl.datefed DESC, fl.feedlogid DESC LIMIT 5"
+    with st.expander("📋 Last 5 Feed Log Entries — click a record to load for editing", expanded=False):
+        _q = """SELECT fl.feedlogid, fl.datefed, b.batchname, b.batchid,
+                       f.feedtype, f.feedid, fl.quantitykg, fl.feedcost, fl.notes
+                FROM public.daily_feed_log fl
+                JOIN public.batches_detailed b ON fl.batchid = b.batchid
+                JOIN public.feeds f ON fl.feedtypeid = f.feedid
+                ORDER BY fl.datefed DESC, fl.feedlogid DESC LIMIT 5"""
         _df = fetch_recent(_q)
         if _df is not None and not _df.empty:
-            _df.columns = ['Date','Batch','Feed Type','Qty (kg)','Cost']
-            _df['Cost'] = _df['Cost'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
-            st.table(_df)
+            for _, row in _df.iterrows():
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.markdown(
+                        f"**{row['datefed']}** | {row['batchname']} | "
+                        f"{row['feedtype']} | {float(row['quantitykg']):.1f}kg | "
+                        f"TZS {int(row['feedcost']):,}" if row['feedcost'] else
+                        f"**{row['datefed']}** | {row['batchname']} | {row['feedtype']} | {float(row['quantitykg']):.1f}kg"
+                    )
+                with c2:
+                    if st.button("📂 Load", key=f"load_feed_{row['feedlogid']}"):
+                        st.session_state.edit_feed_id    = int(row['feedlogid'])
+                        st.session_state.edit_feed_date  = row['datefed']
+                        st.session_state.edit_feed_batch = row['batchname']
+                        st.session_state.edit_feed_type  = row['feedtype']
+                        st.session_state.edit_feed_qty   = float(row['quantitykg'])
+                        st.session_state.edit_feed_notes = row['notes'] or ""
+                        st.rerun()
+                st.divider()
         else:
             st.caption("No feed log entries yet")
 
@@ -746,58 +860,103 @@ with tabs[3]:
     batches      = get_active_batches()
     batch_options = {f"{b[1]}": b[0] for b in batches}
 
+    _m_edit_id = st.session_state.get('edit_mort_id')
+    if _m_edit_id:
+        st.markdown(f"""
+        <div style="background:#1c1a07;border:1px solid #f59e0b;border-radius:8px;
+                    padding:10px 14px;margin-bottom:8px;">
+        ✏️ <strong style="color:#f59e0b;">EDITING MORTALITY RECORD #{_m_edit_id}</strong>
+        </div>""", unsafe_allow_html=True)
+        if st.button("✕ Cancel edit", key="cancel_mort_edit"):
+            for _k in ['edit_mort_id','edit_mort_date','edit_mort_batch',
+                       'edit_mort_qty','edit_mort_reason','edit_mort_notes']:
+                st.session_state[_k] = None
+            st.rerun()
+
+    _reasons = ["Disease", "Accident", "Starvation", "Dehydration", "Unknown", "Other"]
+    _m_batch_default = st.session_state.get('edit_mort_batch') or list(batch_options.keys())[0]
+    _m_batch_idx     = list(batch_options.keys()).index(_m_batch_default) if _m_batch_default in batch_options else 0
+    _m_reason_default = st.session_state.get('edit_mort_reason') or "Unknown"
+    _m_reason_idx     = _reasons.index(_m_reason_default) if _m_reason_default in _reasons else 4
+
     with st.form("mortality_form"):
         col1, col2 = st.columns(2)
 
         with col1:
-            m_batch = st.selectbox("Batch", list(batch_options.keys()))
-            m_date  = st.date_input("Date", value=date.today())
-            m_qty   = st.number_input("Number of Deaths", min_value=1, value=1)
+            m_batch = st.selectbox("Batch", list(batch_options.keys()), index=_m_batch_idx)
+            m_date  = st.date_input("Date",
+                value=st.session_state.get('edit_mort_date') or date.today())
+            m_qty   = st.number_input("Number of Deaths", min_value=1,
+                value=st.session_state.get('edit_mort_qty') or 1)
 
         with col2:
-            m_reason = st.selectbox("Reason", [
-                "Disease", "Accident", "Starvation",
-                "Dehydration", "Unknown", "Other"
-            ])
-            m_by = st.text_input("Recorded By", placeholder="Your name")
+            m_reason = st.selectbox("Reason", _reasons, index=_m_reason_idx)
+            m_by     = st.text_input("Recorded By", placeholder="Your name")
 
         m_notes = st.text_area("Notes",
+            value=st.session_state.get('edit_mort_notes') or "",
             placeholder="Describe symptoms, location of deaths, any pattern...")
 
-        if st.form_submit_button("💾 SAVE MORTALITY REPORT", use_container_width=True):
+        _m_btn = f"✏️ UPDATE RECORD #{_m_edit_id}" if _m_edit_id else "💾 SAVE MORTALITY REPORT"
+        if st.form_submit_button(_m_btn, use_container_width=True):
             if not m_by:
                 st.error("❌ Please enter your name!")
             else:
                 try:
                     c   = fresh_conn()
                     cur = c.cursor()
-                    cur.execute("""
-                        INSERT INTO public.daily_mortality
-                        (batchid, daterecorded, quantitydied, reason, notes)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (batch_options[m_batch], m_date, m_qty, m_reason, m_notes))
+                    if _m_edit_id:
+                        cur.execute("""
+                            UPDATE public.daily_mortality
+                            SET daterecorded=%s, batchid=%s, quantitydied=%s, reason=%s, notes=%s
+                            WHERE mortalityid=%s
+                        """, (m_date, batch_options[m_batch], m_qty, m_reason, m_notes, _m_edit_id))
+                        msg = f"✅ Record #{_m_edit_id} updated!<br>{m_qty} birds | {m_reason}"
+                        for _k in ['edit_mort_id','edit_mort_date','edit_mort_batch',
+                                   'edit_mort_qty','edit_mort_reason','edit_mort_notes']:
+                            st.session_state[_k] = None
+                    else:
+                        cur.execute("""
+                            INSERT INTO public.daily_mortality
+                            (batchid, daterecorded, quantitydied, reason, notes)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (batch_options[m_batch], m_date, m_qty, m_reason, m_notes))
+                        msg = f"✅ Mortality recorded!<br>{m_qty} birds | Reason: {m_reason}"
                     c.commit()
                     c.close()
-
-                    st.markdown(f"""
-                    <div class="success-box">
-                        ✅ Mortality recorded!<br>
-                        {m_qty} birds | Reason: {m_reason}
-                    </div>
-                    """, unsafe_allow_html=True)
-
+                    st.markdown(f'<div class="success-box">{msg}</div>', unsafe_allow_html=True)
+                    fetch_recent.clear()
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
 
 # ============================================================================
 
     # ── Recent entries ──
-    with st.expander("📋 Last 5 Mortality Records", expanded=False):
-        _q = "SELECT dm.daterecorded, b.batchname, dm.quantitydied, dm.reason, dm.notes FROM public.daily_mortality dm JOIN public.batches_detailed b ON dm.batchid = b.batchid ORDER BY dm.daterecorded DESC, dm.mortalityid DESC LIMIT 5"
+    with st.expander("📋 Last 5 Mortality Records — click a record to load for editing", expanded=False):
+        _q = """SELECT dm.mortalityid, dm.daterecorded, b.batchname, b.batchid,
+                       dm.quantitydied, dm.reason, dm.notes
+                FROM public.daily_mortality dm
+                JOIN public.batches_detailed b ON dm.batchid = b.batchid
+                ORDER BY dm.daterecorded DESC, dm.mortalityid DESC LIMIT 5"""
         _df = fetch_recent(_q)
         if _df is not None and not _df.empty:
-            _df.columns = ['Date','Batch','Deaths','Reason','Notes']
-            st.table(_df)
+            for _, row in _df.iterrows():
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.markdown(
+                        f"**{row['daterecorded']}** | {row['batchname']} | "
+                        f"{row['quantitydied']} birds | {row['reason'] or 'Unknown'}"
+                    )
+                with c2:
+                    if st.button("📂 Load", key=f"load_mort_{row['mortalityid']}"):
+                        st.session_state.edit_mort_id     = int(row['mortalityid'])
+                        st.session_state.edit_mort_date   = row['daterecorded']
+                        st.session_state.edit_mort_batch  = row['batchname']
+                        st.session_state.edit_mort_qty    = int(row['quantitydied'])
+                        st.session_state.edit_mort_reason = row['reason'] or "Unknown"
+                        st.session_state.edit_mort_notes  = row['notes'] or ""
+                        st.rerun()
+                st.divider()
         else:
             st.caption("No mortality records yet")
 
@@ -842,14 +1001,32 @@ with tabs[4]:
         )
         e_feedtype_id = feed_options_ex[e_feedtype_name]
 
+    _e_edit_id_pre = st.session_state.get('edit_exp_id')
+    if _e_edit_id_pre:
+        st.markdown(f"""
+        <div style="background:#1c1a07;border:1px solid #f59e0b;border-radius:8px;
+                    padding:10px 14px;margin-bottom:8px;">
+        ✏️ <strong style="color:#f59e0b;">EDITING EXPENSE #{_e_edit_id_pre}</strong>
+        &nbsp;—&nbsp;<span style="color:#94A3B8;">Make changes and click Update</span>
+        </div>""", unsafe_allow_html=True)
+        if st.button("✕ Cancel edit", key="cancel_exp_edit"):
+            for _k in ['edit_exp_id','edit_exp_date','edit_exp_batch','edit_exp_cat',
+                       'edit_exp_desc','edit_exp_qty','edit_exp_uprice','edit_exp_notes']:
+                st.session_state[_k] = None
+            st.rerun()
+
     with st.form("expense_form"):
         col1, col2 = st.columns(2)
 
+        _e_batch_default = st.session_state.get('edit_exp_batch') or "No specific batch"
+        _e_batch_idx     = list(batch_options_ex.keys()).index(_e_batch_default) if _e_batch_default in batch_options_ex else 0
+
         with col1:
-            e_date  = st.date_input("Expense Date", value=date.today())
+            e_date  = st.date_input("Expense Date",
+                value=st.session_state.get('edit_exp_date') or date.today())
             e_batch = st.selectbox(
                 "Related Batch" + (" (Required for Feed Purchase)" if e_category_pre == "Feed Purchase" else " (Optional)"),
-                list(batch_options_ex.keys())
+                list(batch_options_ex.keys()), index=_e_batch_idx
             )
 
         with col2:
@@ -857,7 +1034,9 @@ with tabs[4]:
             e_by     = st.text_input("Recorded By", placeholder="Your name")
 
         desc_hint = f"e.g. 10 bags {e_feedtype_name}" if e_category_pre == "Feed Purchase" and e_feedtype_name else "e.g. Vaccines 3 packages, Labor 5 days"
-        e_desc = st.text_input("Description", placeholder=desc_hint)
+        e_desc = st.text_input("Description",
+            value=st.session_state.get('edit_exp_desc') or "",
+            placeholder=desc_hint)
 
         st.markdown("---")
         st.markdown("**Quantity & Pricing** *(optional — fill for auto-calculation)*")
@@ -906,7 +1085,9 @@ with tabs[4]:
 
         e_notes = st.text_area("Notes", placeholder="Any additional details...")
 
-        if st.form_submit_button("💾 SAVE EXPENSE", use_container_width=True):
+        _e_edit_id  = st.session_state.get('edit_exp_id')
+        _e_btn      = f"✏️ UPDATE EXPENSE #{_e_edit_id}" if _e_edit_id else "💾 SAVE EXPENSE"
+        if st.form_submit_button(_e_btn, use_container_width=True):
             batch_id_ex = batch_options_ex[e_batch]
             if not e_desc:
                 st.error("❌ Please enter a description!")
@@ -923,43 +1104,60 @@ with tabs[4]:
                     c   = fresh_conn()
                     cur = c.cursor()
 
-                    cur.execute("""
-                        INSERT INTO public.expenses
-                        (expensedate, category, description, amount,
-                         quantity, unit_price, receivedfrom, batchid, notes)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING expense_id
-                    """, (
-                        e_date, e_category_pre, e_desc,
-                        e_amount_final,
-                        float(e_qty) if e_qty else None,
-                        float(e_unit_price) if e_unit_price else None,
-                        e_vendor, batch_id_ex, e_notes
-                    ))
-                    new_expense_id = cur.fetchone()[0]
-
-                    # Feed Purchase → also save price to batch_feed_prices
-                    if e_category_pre == "Feed Purchase" and e_feedtype_id and e_qty and e_qty > 0 and e_unit_price and e_unit_price > 0:
-                        unit_cost_kg = round(float(e_unit_price) / 50, 2)
+                    if _e_edit_id:
+                        # UPDATE existing expense
                         cur.execute("""
-                            INSERT INTO public.batch_feed_prices
-                            (batchid, feedid, unit_cost_per_kg, purchase_date, expense_id)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, (batch_id_ex, e_feedtype_id, unit_cost_kg, e_date, new_expense_id))
+                            UPDATE public.expenses
+                            SET expensedate=%s, category=%s, description=%s, amount=%s,
+                                quantity=%s, unit_price=%s, batchid=%s, notes=%s
+                            WHERE expense_id=%s
+                        """, (
+                            e_date, e_category_pre, e_desc, e_amount_final,
+                            float(e_qty) if e_qty else None,
+                            float(e_unit_price) if e_unit_price else None,
+                            batch_id_ex, e_notes, _e_edit_id
+                        ))
+                        # Feed Purchase: update batch_feed_prices too
+                        if e_category_pre == "Feed Purchase" and e_feedtype_id and e_qty and e_unit_price:
+                            unit_cost_kg = round(float(e_unit_price) / 50, 2)
+                            cur.execute("""
+                                UPDATE public.batch_feed_prices
+                                SET unit_cost_per_kg=%s, purchase_date=%s, feedid=%s
+                                WHERE expense_id=%s
+                            """, (unit_cost_kg, e_date, e_feedtype_id, _e_edit_id))
+                        msg = f"✅ Expense #{_e_edit_id} updated!<br>{e_category_pre}: {e_desc} → TZS {e_amount_final:,}"
+                        for _k in ['edit_exp_id','edit_exp_date','edit_exp_batch','edit_exp_cat',
+                                   'edit_exp_desc','edit_exp_qty','edit_exp_uprice','edit_exp_notes']:
+                            st.session_state[_k] = None
+                    else:
+                        # INSERT new expense
+                        cur.execute("""
+                            INSERT INTO public.expenses
+                            (expensedate, category, description, amount,
+                             quantity, unit_price, receivedfrom, batchid, notes)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            RETURNING expense_id
+                        """, (
+                            e_date, e_category_pre, e_desc, e_amount_final,
+                            float(e_qty) if e_qty else None,
+                            float(e_unit_price) if e_unit_price else None,
+                            e_vendor, batch_id_ex, e_notes
+                        ))
+                        new_expense_id = cur.fetchone()[0]
+                        if e_category_pre == "Feed Purchase" and e_feedtype_id and e_qty and e_unit_price:
+                            unit_cost_kg = round(float(e_unit_price) / 50, 2)
+                            cur.execute("""
+                                INSERT INTO public.batch_feed_prices
+                                (batchid, feedid, unit_cost_per_kg, purchase_date, expense_id)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (batch_id_ex, e_feedtype_id, unit_cost_kg, e_date, new_expense_id))
+                        extra = f"<br>📊 {e_feedtype_name} price saved: TZS {int(e_unit_price/50):,}/kg" if e_category_pre == "Feed Purchase" and e_qty and e_unit_price else ""
+                        msg = f"✅ Expense saved!<br>{e_category_pre}: {e_desc} → TZS {e_amount_final:,}{extra}"
 
                     c.commit()
                     c.close()
-
-                    extra_msg = ""
-                    if e_category_pre == "Feed Purchase" and e_qty and e_unit_price:
-                        extra_msg = f"<br>📊 {e_feedtype_name} price saved: TZS {int(e_unit_price/50):,}/kg for this batch"
-
-                    st.markdown(f"""
-                    <div class="success-box">
-                        ✅ Expense saved!<br>
-                        {e_category_pre}: {e_desc} → TZS {e_amount_final:,}{extra_msg}
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f'<div class="success-box">{msg}</div>', unsafe_allow_html=True)
+                    fetch_recent.clear()
 
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
@@ -967,15 +1165,35 @@ with tabs[4]:
 # ============================================================================
 
     # ── Recent entries ──
-    with st.expander("📋 Last 5 Expenses", expanded=False):
-        _q = "SELECT e.expensedate, e.category, e.description, e.quantity, e.unit_price, e.amount, b.batchname FROM public.expenses e LEFT JOIN public.batches_detailed b ON e.batchid = b.batchid ORDER BY e.expensedate DESC, e.expense_id DESC LIMIT 5"
+    with st.expander("📋 Last 5 Expenses — click a record to load for editing", expanded=False):
+        _q = """SELECT e.expense_id, e.expensedate, e.category, e.description,
+                       e.quantity, e.unit_price, e.amount, b.batchname, e.batchid, e.notes
+                FROM public.expenses e
+                LEFT JOIN public.batches_detailed b ON e.batchid = b.batchid
+                ORDER BY e.expensedate DESC, e.expense_id DESC LIMIT 5"""
         _df = fetch_recent(_q)
         if _df is not None and not _df.empty:
-            _df.columns = ['Date','Category','Description','Qty','Unit Price','Amount','Batch']
-            _df['Amount']     = _df['Amount'].apply(lambda x: f"TZS {int(x):,}")
-            _df['Unit Price'] = _df['Unit Price'].apply(lambda x: f"TZS {int(x):,}" if x else '-')
-            _df['Qty']        = _df['Qty'].apply(lambda x: int(x) if x else '-')
-            st.table(_df)
+            for _, row in _df.iterrows():
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    amt_str = f"TZS {int(row['amount']):,}"
+                    batch_str = row['batchname'] or 'No batch'
+                    st.markdown(
+                        f"**{row['expensedate']}** | {row['category']} | "
+                        f"{row['description']} | {amt_str} | {batch_str}"
+                    )
+                with c2:
+                    if st.button("📂 Load", key=f"load_exp_{row['expense_id']}"):
+                        st.session_state.edit_exp_id     = int(row['expense_id'])
+                        st.session_state.edit_exp_date   = row['expensedate']
+                        st.session_state.edit_exp_batch  = row['batchname'] or "No specific batch"
+                        st.session_state.edit_exp_cat    = row['category']
+                        st.session_state.edit_exp_desc   = row['description'] or ""
+                        st.session_state.edit_exp_qty    = float(row['quantity']) if row['quantity'] else None
+                        st.session_state.edit_exp_uprice = float(row['unit_price']) if row['unit_price'] else None
+                        st.session_state.edit_exp_notes  = row['notes'] or ""
+                        st.rerun()
+                st.divider()
         else:
             st.caption("No expenses yet")
 
