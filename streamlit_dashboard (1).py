@@ -376,6 +376,65 @@ events_df = fetch_data(f"""
     ORDER BY eventdate DESC
 """)
 
+# ── Feed Store balance query ──
+# Uses batch_feed_prices as bridge between expenses and feed types
+# IN  = purchases via batch_feed_prices → expenses.quantity * 50
+# OUT = daily_feed_log.quantitykg
+# No cross join — only feed types with actual purchase or consumption data
+_stock_batch = strict_filter.replace("AND batchid", "AND e.batchid") if strict_filter else ""
+
+feed_stock_df = fetch_data(f"""
+    WITH purchases AS (
+        SELECT
+            e.batchid,
+            bfp.feedid,
+            SUM(e.quantity * 50)  AS total_in_kg,
+            COUNT(e.expense_id)   AS purchase_count
+        FROM public.expenses e
+        JOIN public.batch_feed_prices bfp ON bfp.expense_id = e.expense_id
+        WHERE e.category = 'Feed Purchase'
+        AND e.quantity IS NOT NULL AND e.quantity > 0
+        {_stock_batch}
+        GROUP BY e.batchid, bfp.feedid
+    ),
+    consumption AS (
+        SELECT
+            batchid,
+            feedtypeid AS feedid,
+            SUM(quantitykg) AS total_out_kg,
+            COALESCE(
+                AVG(quantitykg) FILTER (
+                    WHERE datefed >= CURRENT_DATE - INTERVAL '7 days'
+                ), AVG(quantitykg)
+            ) AS avg_daily_kg
+        FROM public.daily_feed_log
+        WHERE 1=1 {strict_filter}
+        GROUP BY batchid, feedtypeid
+    ),
+    latest_price AS (
+        SELECT DISTINCT ON (batchid, feedid)
+            batchid, feedid, unit_cost_per_kg
+        FROM public.batch_feed_prices
+        ORDER BY batchid, feedid, purchase_date DESC
+    )
+    SELECT
+        b.batchname,
+        f.feedtype,
+        p.batchid,
+        p.feedid,
+        COALESCE(p.total_in_kg, 0)                                     AS total_in_kg,
+        COALESCE(c.total_out_kg, 0)                                     AS total_out_kg,
+        COALESCE(p.total_in_kg,0) - COALESCE(c.total_out_kg,0)         AS balance_kg,
+        COALESCE(c.avg_daily_kg, 0)                                     AS avg_daily_kg,
+        COALESCE(lp.unit_cost_per_kg, 0)                                AS unit_cost_per_kg
+    FROM purchases p
+    JOIN public.batches_detailed b ON p.batchid = b.batchid
+    JOIN public.feeds f            ON p.feedid  = f.feedid
+    LEFT JOIN consumption   c  ON c.batchid = p.batchid AND c.feedid  = p.feedid
+    LEFT JOIN latest_price  lp ON lp.batchid = p.batchid AND lp.feedid = p.feedid
+    ORDER BY b.batchname, f.feedtype
+""")
+
 weight_df = fetch_data(f"""
     SELECT ws.sessionid, ws.batchid, ws.sessiondate, ws.dayofcycle,
            ws.averageweightperbird, ws.samplesize
@@ -878,6 +937,7 @@ elif st.session_state.current_tab == 'operations':
     try:
         st.markdown("## ⚙️ Operations")
 
+        # ── Top KPIs ──
         total_dead    = safe_int(mortality_df['quantitydied'].sum()) if not mortality_df.empty else 0
         total_started = 0
         if selected_ids and not all_batches.empty:
@@ -885,15 +945,138 @@ elif st.session_state.current_tab == 'operations':
                 all_batches.loc[all_batches['batchid'].isin(selected_ids), 'quantitychicksstarted'].sum()
             )
         mortality_rate = (total_dead / total_started * 100) if total_started > 0 else 0
-        mort_color = "#ef4444" if mortality_rate >= 5 else "#f59e0b" if mortality_rate >= 3 else "#10b981"
+        mort_color     = "#ef4444" if mortality_rate >= 5 else "#f59e0b" if mortality_rate >= 3 else "#10b981"
+        avg_weight     = float(weight_df['averageweightperbird'].mean()) if not weight_df.empty else 0
 
         c1, c2, c3 = st.columns(3)
         with c1: st.markdown(mcard("Total Deaths", f"{total_dead:,}", f"of {total_started:,} started"), unsafe_allow_html=True)
         with c2: st.markdown(mcard("Mortality Rate", f"{mortality_rate:.2f}%", "Target < 3%", mort_color), unsafe_allow_html=True)
-        with c3:
-            avg_weight = float(weight_df['averageweightperbird'].mean()) if not weight_df.empty else 0
-            st.markdown(mcard("Avg Weight", f"{avg_weight:.0f}g" if avg_weight > 0 else "—", "Latest session avg"), unsafe_allow_html=True)
+        with c3: st.markdown(mcard("Avg Weight", f"{avg_weight:.0f}g" if avg_weight > 0 else "—", "Latest session avg"), unsafe_allow_html=True)
 
+        # ════════════════════════════════════════════════════
+        # FEED STORE SECTION
+        # ════════════════════════════════════════════════════
+        st.divider()
+        st.markdown("### 📦 Feed Store")
+
+        if not feed_stock_df.empty:
+            # ── Stock cards per feed type ──
+            stock_cols = st.columns(min(len(feed_stock_df), 3))
+            for i, (_, row) in enumerate(feed_stock_df.iterrows()):
+                balance     = float(row['balance_kg'])
+                total_in    = float(row['total_in_kg'])
+                total_out   = float(row['total_out_kg'])
+                avg_daily   = float(row['avg_daily_kg'])
+                unit_cost   = float(row['unit_cost_per_kg'])
+                stock_value = balance * unit_cost
+
+                # 10% low stock threshold
+                low_threshold = total_in * 0.10
+                if balance <= 0:
+                    s_color, s_label = "#ef4444", "🔴 OUT OF STOCK"
+                elif balance <= low_threshold:
+                    s_color, s_label = "#f59e0b", "🟡 LOW STOCK"
+                else:
+                    s_color, s_label = "#10b981", "🟢 OK"
+
+                days_left = int(balance / avg_daily) if avg_daily > 0 else None
+
+                with stock_cols[i % 3]:
+                    st.markdown(f"""
+                    <div class="metric-card" style="text-align:left; padding:16px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <span style="color:#e6edf3; font-weight:700; font-size:15px;">
+                                {row['feedtype']} — {row['batchname']}
+                            </span>
+                            <span style="color:{s_color}; font-size:12px; font-weight:600;">{s_label}</span>
+                        </div>
+                        <div style="margin-bottom:8px;">
+                            <span style="color:#8b949e; font-size:11px;">BALANCE</span><br>
+                            <span style="color:{s_color}; font-size:24px; font-weight:700;">{balance:,.0f} kg</span>
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+                            <div>
+                                <span style="color:#8b949e; font-size:10px;">STOCK VALUE</span><br>
+                                <span style="color:#e6edf3; font-size:13px;">TZS {stock_value:,.0f}</span>
+                            </div>
+                            <div>
+                                <span style="color:#8b949e; font-size:10px;">DAYS LEFT</span><br>
+                                <span style="color:#e6edf3; font-size:13px;">
+                                    {"~" + str(days_left) + " days" if days_left is not None else "—"}
+                                </span>
+                            </div>
+                            <div>
+                                <span style="color:#8b949e; font-size:10px;">TOTAL IN</span><br>
+                                <span style="color:#10b981; font-size:13px;">{total_in:,.0f} kg</span>
+                            </div>
+                            <div>
+                                <span style="color:#8b949e; font-size:10px;">TOTAL OUT</span><br>
+                                <span style="color:#f59e0b; font-size:13px;">{total_out:,.0f} kg</span>
+                            </div>
+                        </div>
+                        <div style="margin-top:10px; background:#2d333b; border-radius:4px; height:6px;">
+                            <div style="width:{min(100, max(0, (balance/total_in*100) if total_in > 0 else 0)):.0f}%;
+                                        background:{s_color}; border-radius:4px; height:6px;"></div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-top:3px;">
+                            <span style="color:#8b949e; font-size:10px;">0 kg</span>
+                            <span style="color:#8b949e; font-size:10px;">{total_in:,.0f} kg total purchased</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # ── Stock movement chart (IN vs OUT over time) ──
+            st.markdown("### Stock Movement")
+            if not feed_log_df.empty:
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    st.markdown("**Daily Consumption (OUT)**")
+                    if 'feedtype' in feed_log_df.columns:
+                        feed_by_type = feed_log_df.groupby(['datefed','feedtype'])['quantitykg'].sum().reset_index()
+                        fig_out = go.Figure()
+                        for ft in feed_by_type['feedtype'].unique():
+                            fdata = feed_by_type[feed_by_type['feedtype'] == ft]
+                            fig_out.add_trace(go.Bar(
+                                x=fdata['datefed'], y=fdata['quantitykg'],
+                                name=ft
+                            ))
+                        fig_out.update_layout(**PLOT_LAYOUT, height=240,
+                                              barmode='stack', yaxis_title='kg',
+                                              margin=dict(l=10,r=10,t=10,b=10))
+                        st.plotly_chart(fig_out, use_container_width=True)
+                    else:
+                        daily_out = feed_log_df.groupby('datefed')['quantitykg'].sum().reset_index()
+                        fig_out = go.Figure(go.Bar(
+                            x=daily_out['datefed'], y=daily_out['quantitykg'],
+                            marker_color='#f59e0b'
+                        ))
+                        fig_out.update_layout(**PLOT_LAYOUT, height=240,
+                                              yaxis_title='kg',
+                                              margin=dict(l=10,r=10,t=10,b=10))
+                        st.plotly_chart(fig_out, use_container_width=True)
+
+                with c2:
+                    st.markdown("**Feed Store Ledger**")
+                    ledger_rows = []
+                    for _, row in feed_stock_df.iterrows():
+                        ledger_rows.append({
+                            'Feed Type':  row['feedtype'],
+                            'Batch':      row['batchname'],
+                            'Total In':   f"{float(row['total_in_kg']):,.0f} kg",
+                            'Total Out':  f"{float(row['total_out_kg']):,.0f} kg",
+                            'Balance':    f"{float(row['balance_kg']):,.0f} kg",
+                            'Value':      f"TZS {float(row['balance_kg']) * float(row['unit_cost_per_kg']):,.0f}",
+                        })
+                    st.dataframe(pd.DataFrame(ledger_rows),
+                                 use_container_width=True, hide_index=True)
+        else:
+            st.info("📌 No feed purchase data yet — store will populate once feed purchases are recorded")
+
+        # ════════════════════════════════════════════════════
+        # MORTALITY SECTION
+        # ════════════════════════════════════════════════════
+        st.divider()
         c1, c2 = st.columns(2)
 
         with c1:
@@ -923,8 +1106,7 @@ elif st.session_state.current_tab == 'operations':
                 for day, tgt in targets.items():
                     fig2.add_hline(y=tgt, line_dash="dot", line_color="#f59e0b",
                                    annotation_text=f"D{day}:{tgt}g")
-                fig2.update_layout(**PLOT_LAYOUT, height=280,
-                                   yaxis_title="grams",
+                fig2.update_layout(**PLOT_LAYOUT, height=280, yaxis_title="grams",
                                    margin=dict(l=10,r=10,t=10,b=10))
                 st.plotly_chart(fig2, use_container_width=True)
             else:

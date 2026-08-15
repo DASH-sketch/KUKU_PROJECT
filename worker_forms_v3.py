@@ -754,6 +754,72 @@ with tabs[2]:
                     st.session_state[_k] = None
                 st.rerun()
 
+        # ── Current stock balance for this batch + feed type ──
+        try:
+            c_s = fresh_conn()
+            cur_s = c_s.cursor()
+            cur_s.execute("""
+                SELECT
+                    COALESCE(SUM(e.quantity * 50), 0) AS total_in_kg,
+                    COALESCE(
+                        (SELECT SUM(fl.quantitykg)
+                         FROM public.daily_feed_log fl
+                         WHERE fl.batchid = %s AND fl.feedtypeid = %s), 0
+                    ) AS total_out_kg,
+                    COALESCE(
+                        (SELECT AVG(fl.quantitykg)
+                         FROM public.daily_feed_log fl
+                         WHERE fl.batchid = %s AND fl.feedtypeid = %s
+                         AND fl.datefed >= CURRENT_DATE - INTERVAL '7 days'), 0
+                    ) AS avg_daily_kg
+                FROM public.expenses e
+                JOIN public.batch_feed_prices bfp ON bfp.expense_id = e.expense_id
+                WHERE e.batchid = %s AND bfp.feedid = %s
+                AND e.category = 'Feed Purchase'
+                AND e.quantity IS NOT NULL AND e.quantity > 0
+            """, [fl_batch_id, f_feedid, fl_batch_id, f_feedid, fl_batch_id, f_feedid])
+            stock_row = cur_s.fetchone()
+            c_s.close()
+
+            if stock_row:
+                s_in, s_out, s_avg = float(stock_row[0]), float(stock_row[1]), float(stock_row[2])
+                s_balance  = s_in - s_out
+                low_thresh = s_in * 0.10
+                s_days     = int(s_balance / s_avg) if s_avg > 0 else None
+
+                if s_balance <= 0:
+                    s_color, s_status = "#ef4444", "🔴 OUT OF STOCK"
+                elif s_balance <= low_thresh:
+                    s_color, s_status = "#f59e0b", f"🟡 LOW STOCK (10% threshold: {low_thresh:.0f}kg)"
+                else:
+                    s_color, s_status = "#10b981", "🟢 In Stock"
+
+                st.markdown(f"""
+                <div style="background:#0f172a;border:1px solid {s_color};border-radius:8px;
+                            padding:12px;margin-bottom:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="color:#94A3B8;font-size:11px;">CURRENT STOCK — {f_type}</span>
+                        <span style="color:{s_color};font-size:12px;font-weight:600;">{s_status}</span>
+                    </div>
+                    <div style="display:flex;gap:24px;margin-top:8px;">
+                        <div>
+                            <span style="color:#94A3B8;font-size:10px;">BALANCE</span><br>
+                            <span style="color:{s_color};font-size:20px;font-weight:700;">{s_balance:,.0f} kg</span>
+                        </div>
+                        <div>
+                            <span style="color:#94A3B8;font-size:10px;">AVG DAILY (7d)</span><br>
+                            <span style="color:#e6edf3;font-size:14px;">{s_avg:.1f} kg/day</span>
+                        </div>
+                        <div>
+                            <span style="color:#94A3B8;font-size:10px;">DAYS LEFT</span><br>
+                            <span style="color:#e6edf3;font-size:14px;">{"~" + str(s_days) + " days" if s_days else "—"}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        except:
+            pass  # Stock preview is informational — never block the form
+
         with st.form("feed_form"):
             col1, col2 = st.columns(2)
 
